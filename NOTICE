@@ -1,0 +1,27 @@
+terraform-docs-mcp
+Copyright (c) 2026 terraform-docs-mcp contributors
+
+This product bundles documentation from third-party projects. The bundled
+documentation is redistributed unmodified under the terms of the Mozilla
+Public License 2.0. Full license texts are installed alongside the packaged
+documentation at `terraform_docs_mcp/_data/licenses/`.
+
+--------------------------------------------------------------------------
+Terraform AWS Provider
+    https://github.com/hashicorp/terraform-provider-aws
+    Licensed under the Mozilla Public License 2.0
+    Bundled content: website/docs/**
+    Pinned commit: 424fe4c8ef3366742f6537293af02d8e921505b8
+
+Terraform Google Cloud Provider
+    https://github.com/hashicorp/terraform-provider-google
+    Licensed under the Mozilla Public License 2.0
+    Bundled content: website/docs/**
+    Pinned commit: 97d6358b86cb34c604b7fff6123004829a7e893b
+--------------------------------------------------------------------------
+
+This product also bundles model weights:
+
+mixedbread-ai/mxbai-embed-xsmall-v1
+    https://huggingface.co/mixedbread-ai/mxbai-embed-xsmall-v1
+    Licensed under the Apache License 2.0

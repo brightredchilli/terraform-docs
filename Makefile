@@ -1,0 +1,49 @@
+PYTHON_VERSION := 3.14
+DATA_DIR := src/terraform_docs_mcp/_data
+
+.PHONY: help bootstrap sync index build install test clean distclean
+
+help:
+	@echo "bootstrap  fetch submodules and sparse-checkout just the docs"
+	@echo "sync       install dependencies into .venv"
+	@echo "index      build the search index into $(DATA_DIR)"
+	@echo "build      build the wheel (runs index first)"
+	@echo "install    install the tool locally via uv"
+	@echo "test       run the test suite"
+	@echo "clean      remove the generated index"
+
+# Sparse-checkout config is not recorded in .gitmodules, so a fresh clone gets
+# the full ~430 MB of provider source until this runs. Restricting to
+# website/docs brings that down to ~38 MB. Cone mode keeps root files, which is
+# how we still get each provider's LICENSE.
+bootstrap:
+	git submodule update --init --depth 1
+	@for m in terraform-provider-aws terraform-provider-google; do \
+		git -C $$m sparse-checkout init --cone; \
+		git -C $$m sparse-checkout set website/docs; \
+	done
+	@du -sh terraform-provider-aws terraform-provider-google
+
+sync:
+	uv sync --all-groups
+
+index: sync
+	uv run python -m terraform_docs_mcp.build_index
+
+# uv_build runs no build hooks, so `index` cannot be triggered from inside
+# `uv build`. Make enforces the ordering instead; index.py additionally fails
+# loudly at runtime if _data/ is missing.
+build: index
+	uv build --wheel
+
+install: build
+	uv tool install --reinstall --python $(PYTHON_VERSION) .
+
+test: sync
+	uv run pytest -q
+
+clean:
+	rm -rf $(DATA_DIR) dist
+
+distclean: clean
+	rm -rf .venv
