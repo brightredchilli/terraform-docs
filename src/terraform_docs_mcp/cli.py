@@ -3,18 +3,19 @@
 Exists so retrieval can be exercised and tuned without wiring up an MCP client.
 """
 
-import argparse
-from enum import Enum, StrEnum
 import json
+from pathlib import Path
 import sys
-from typing import Annotated, Literal
+from typing import Annotated
 
 import typer
 
+from terraform_docs_mcp._config import PROJECT_ROOT
 from terraform_docs_mcp.corpus import Kind, Provider
 from terraform_docs_mcp.util import all_values, handle_broken_pipe
 
 from .index import Index, IndexUnavailable
+from .build_index import build as _build_index
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -82,6 +83,14 @@ def search(
     results = index.search(query, provider=provider, kind=kind, limit=limit)
 
     print(json.dumps(results, indent=2))
+
+
+@app.command()
+def build():
+    """
+    Build the packaged search index
+    """
+    _build_index()
 
 
 if __name__ == "__main__":

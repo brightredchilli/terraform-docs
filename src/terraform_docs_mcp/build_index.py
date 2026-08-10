@@ -11,17 +11,19 @@ and writes into the package's ``_data`` directory, which is then shipped by
 
 from __future__ import annotations
 
-import argparse
+from itertools import islice
 import shutil
 import sqlite3
 import subprocess
 import time
 from pathlib import Path
+from typing import Sequence
 
 import numpy as np
 
-from ._config import PROVIDERS
-from .corpus import chunk_document, iter_documents
+from ._config import DATA_DIR, PROJECT_ROOT
+
+from .corpus import Document, chunk_document, iter_documents, PROVIDERS
 from .embed import MODEL_ID, SentenceTransformerEmbedder, download_model
 from .index import INDEX_FILENAME, SCHEMA, VECTORS_FILENAME, quantize
 
@@ -43,20 +45,21 @@ def _git_sha(repo: Path) -> str:
         return "unknown"
 
 
-def _copy_docs(project_root: Path, data_dir: Path) -> None:
+def _copy_docs() -> None:
     """Copy provider markdown and licenses into the packaged data directory.
 
     Copied rather than symlinked: the submodules do not exist inside a wheel.
     """
-    for provider, repo in PROVIDERS.items():
-        src = project_root / repo / "website" / "docs"
-        dst = data_dir / "docs" / provider
+    data_dir = PROJECT_ROOT / "_data"
+    for config in PROVIDERS.values():
+        src = PROJECT_ROOT / config.source_docs_dir
+        dst = data_dir / config.destination_docs_dir
         if dst.exists():
             shutil.rmtree(dst)
         shutil.copytree(src, dst)
 
-        license_src = project_root / repo / "LICENSE"
-        license_dst = data_dir / "licenses" / provider
+        license_src = PROJECT_ROOT / config.source_license
+        license_dst = data_dir / config.destination_docs_dir
         license_dst.mkdir(parents=True, exist_ok=True)
         if license_src.exists():
             shutil.copyfile(license_src, license_dst / "LICENSE")
@@ -66,17 +69,17 @@ def _copy_docs(project_root: Path, data_dir: Path) -> None:
             )
 
 
-def build(project_root: Path, data_dir: Path) -> dict[str, int]:
-    data_dir.mkdir(parents=True, exist_ok=True)
+def build() -> dict[str, int]:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     _log("fetching embedding model")
-    model_dir = download_model(data_dir / "model")
+    model_dir = download_model(DATA_DIR / "model")
 
     _log("loading and chunking documents")
     t0 = time.time()
     documents, chunks = [], []
-    for provider, repo in PROVIDERS.items():
-        for doc in iter_documents(project_root / repo, provider):
+    for provider in PROVIDERS.values():
+        for doc in iter_documents(provider):
             documents.append(doc)
             chunks.extend(chunk_document(doc))
     _log(f"{len(documents)} documents, {len(chunks)} chunks ({time.time() - t0:.1f}s)")
@@ -87,37 +90,38 @@ def build(project_root: Path, data_dir: Path) -> dict[str, int]:
     # encode() handles batching, length-sorting to minimise padding, and the
     # progress bar itself; there is nothing to hand-roll here.
     vectors = embedder.embed_documents([c.text for c in chunks], progress=True)
-    _log(f"embedded {len(chunks)} chunks, dim {vectors.shape[1]} ({time.time() - t0:.1f}s)")
+    _log(
+        f"embedded {len(chunks)} chunks, dim {vectors.shape[1]} ({time.time() - t0:.1f}s)"
+    )
 
     _log("writing vectors")
     quantized = quantize(vectors)
-    np.save(data_dir / VECTORS_FILENAME, quantized)
+    np.save(DATA_DIR / VECTORS_FILENAME, quantized)
 
     _log("writing sqlite index")
-    _write_db(project_root, data_dir, documents, chunks, vectors.shape[1])
+    _write_db(documents, chunks, vectors.shape[1])
 
     _log("copying documentation and licenses")
-    _copy_docs(project_root, data_dir)
+    _copy_docs()
 
     return {"documents": len(documents), "chunks": len(chunks)}
 
 
-def _write_db(project_root: Path, data_dir: Path, documents, chunks, dim: int) -> None:
-    db_path = data_dir / INDEX_FILENAME
+def _write_db(documents: Sequence[Document], chunks, dim: int) -> None:
+    db_path = DATA_DIR / INDEX_FILENAME
     db_path.unlink(missing_ok=True)
 
     conn = sqlite3.connect(db_path)
     try:
         conn.executescript(SCHEMA)
         _ = conn.executemany(
-            "INSERT INTO documents (doc_id, provider, kind, name, title, subcategory,"
-            " description, rel_path) VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO documents (doc_id, provider, kind, title, subcategory,"
+            " description, rel_path) VALUES (?,?,?,?,?,?,?)",
             [
                 (
                     d.doc_id,
                     d.provider,
                     d.kind,
-                    d.name,
                     d.title,
                     d.subcategory,
                     d.description,
@@ -148,8 +152,10 @@ def _write_db(project_root: Path, data_dir: Path, documents, chunks, dim: int) -
             "chunk_count": str(len(chunks)),
             "document_count": str(len(documents)),
         }
-        for provider, repo in PROVIDERS.items():
-            meta[f"{provider}_commit"] = _git_sha(project_root / repo)
+        for config in PROVIDERS.values():
+            meta[f"{config.provider}_commit"] = _git_sha(
+                PROJECT_ROOT / config.source_docs_dir
+            )
         conn.executemany(
             "INSERT INTO meta (key, value) VALUES (?,?)", sorted(meta.items())
         )
@@ -158,26 +164,3 @@ def _write_db(project_root: Path, data_dir: Path, documents, chunks, dim: int) -
         conn.execute("VACUUM")
     finally:
         conn.close()
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build the packaged search index.")
-    parser.add_argument(
-        "--project-root",
-        type=Path,
-        default=Path(__file__).resolve().parents[2],
-        help="Repository root containing the provider submodules.",
-    )
-    args = parser.parse_args(argv)
-
-    data_dir = Path(__file__).resolve().parent / "_data"
-    stats = build(args.project_root, data_dir)
-
-    total = sum(p.stat().st_size for p in data_dir.rglob("*") if p.is_file())
-    _log(f"done: {stats['documents']} documents, {stats['chunks']} chunks")
-    _log(f"_data size: {total / 1e6:.1f} MB")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

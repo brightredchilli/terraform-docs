@@ -90,7 +90,9 @@ def search(
 
 @mcp.tool()
 def get_document(
-    doc_id: Annotated[str, Field(description="Document id from `search`, e.g. 'aws:r/instance'.")],
+    doc_id: Annotated[
+        str, Field(description="Document id from `search`, e.g. 'aws:r/instance'.")
+    ],
     section: Annotated[
         str | None,
         Field(
@@ -102,13 +104,9 @@ def get_document(
         ),
     ] = None,
 ) -> str:
-    """Return the markdown for one documentation page, or a single section.
-
-    Large resource pages run to tens of thousands of tokens, so prefer passing
-    `section` when you know which part you need.
-    """
+    """Return the markdown for one documentation page"""
     try:
-        return get_index().get_document(doc_id, section=section)
+        return get_index().get_document(doc_id)
     except KeyError as exc:
         # KeyError stringifies with quotes; unwrap for a readable tool error.
         raise ValueError(str(exc.args[0]) if exc.args else str(exc)) from exc

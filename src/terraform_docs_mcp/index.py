@@ -80,7 +80,7 @@ CREATE INDEX idx_chunks_doc ON chunks(doc_id);
 CREATE VIRTUAL TABLE chunks_fts USING fts5(
     text,
     content='',
-    tokenize='porter unicode61 remove_diacritics 2'
+    tokenize='unicode61 remove_diacritics 2'
 );
 """
 
@@ -302,7 +302,7 @@ class Index:
 
         placeholders = ",".join("?" * len(candidates))
         where, params = self._filter_clause(provider, kind)
-        sql = f"SELECT doc_id, kind FROM documents d WHERE lower(d.name) IN ({placeholders})"
+        sql = f"SELECT doc_id, kind FROM documents d WHERE lower(d.title) IN ({placeholders})"
         if where:
             sql += f" AND {where}"
         rows = self._conn().execute(sql, [*candidates, *params]).fetchall()

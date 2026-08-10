@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 
 import pytest
 
+from terraform_docs_mcp._config import PROJECT_ROOT
 from terraform_docs_mcp.corpus import (
+    PROVIDER_AWS,
+    PROVIDER_GOOGLE,
     Document,
+    Kind,
+    Provider,
     chunk_document,
     iter_documents,
     strip_frontmatter,
 )
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 AWS = PROJECT_ROOT / "terraform-provider-aws"
 GOOGLE = PROJECT_ROOT / "terraform-provider-google"
 
@@ -58,9 +61,8 @@ class TestChunking:
     def _doc(body: str) -> Document:
         return Document(
             doc_id="aws:r/example",
-            provider="aws",
-            kind="r",
-            name="aws_example",
+            provider=Provider.aws,
+            kind=Kind.resource,
             title="Resource: aws_example",
             subcategory="EC2",
             description=None,
@@ -90,15 +92,23 @@ class TestChunking:
         assert any("Argument Reference" in h for h in headings)
 
     def test_breadcrumb_is_prepended_to_text(self):
-        body = "# Resource: aws_example\n\n## Argument Reference\n\n* `ami` - The AMI.\n"
-        chunk = next(c for c in chunk_document(self._doc(body)) if "Argument" in c.heading_path)
+        body = (
+            "# Resource: aws_example\n\n## Argument Reference\n\n* `ami` - The AMI.\n"
+        )
+        chunk = next(
+            c for c in chunk_document(self._doc(body)) if "Argument" in c.heading_path
+        )
         first_line = chunk.text.split("\n", 1)[0]
         assert "aws_example" in first_line
         assert "Argument Reference" in first_line
 
     def test_breadcrumb_does_not_repeat_the_h1(self):
-        body = "# Resource: aws_example\n\n## Argument Reference\n\n* `ami` - The AMI.\n"
-        chunk = next(c for c in chunk_document(self._doc(body)) if "Argument" in c.heading_path)
+        body = (
+            "# Resource: aws_example\n\n## Argument Reference\n\n* `ami` - The AMI.\n"
+        )
+        chunk = next(
+            c for c in chunk_document(self._doc(body)) if "Argument" in c.heading_path
+        )
         first_line = chunk.text.split("\n", 1)[0]
         assert first_line.count("aws_example") == 1
 
@@ -122,7 +132,9 @@ class TestChunking:
         Body sections describe parts of a resource, so a topical query has to
         outrank thousands of argument-level chunks to reach the right page.
         """
-        body = "# Resource: aws_example\n\n## Argument Reference\n\n* `ami` - The AMI.\n"
+        body = (
+            "# Resource: aws_example\n\n## Argument Reference\n\n* `ami` - The AMI.\n"
+        )
         doc = self._doc(body)
         summary = chunk_document(doc)[0]
         assert summary.ordinal == 0
@@ -133,9 +145,8 @@ class TestChunking:
     def test_summary_chunk_does_not_repeat_itself(self):
         doc = Document(
             doc_id="aws:guides/x",
-            provider="aws",
-            kind="guides",
-            name=None,
+            provider=Provider.aws,
+            kind=Kind.guide,
             title="Upgrade Guide",
             subcategory=None,
             description="Upgrade Guide",  # guides repeat their title here
@@ -148,36 +159,27 @@ class TestChunking:
 @requires_submodules
 class TestRealCorpus:
     def test_aws_resource_metadata(self):
-        docs = {d.doc_id: d for d in iter_documents(AWS, "aws")}
-        doc = docs["aws:r/instance"]
-        assert doc.name == "aws_instance"
-        assert doc.kind == "r"
+        docs = {d.doc_id: d for d in iter_documents(PROVIDER_AWS)}
+        doc = docs["aws:resource/instance"]
+        assert doc.kind == Kind.resource
         assert doc.subcategory and "EC2" in doc.subcategory
 
     def test_google_backticked_title_resolves(self):
         """Google wraps identifiers in backticks: `google_bigquery_dataset`."""
-        docs = {d.doc_id: d for d in iter_documents(GOOGLE, "google")}
-        assert docs["google:d/bigquery_dataset"].name == "google_bigquery_dataset"
+        docs = {d.doc_id: d for d in iter_documents(PROVIDER_GOOGLE)}
+        assert (
+            docs["google:datasource/bigquery_dataset"].title
+            == "google_bigquery_dataset"
+        )
 
     def test_plain_markdown_suffix_is_picked_up(self):
         """A handful of Google pages use .markdown, not .html.markdown."""
-        docs = {d.doc_id: d for d in iter_documents(GOOGLE, "google")}
-        assert "google:d/dns_record_set" in docs
-
-    def test_every_entity_page_resolves_a_name(self):
-        from terraform_docs_mcp.corpus import ENTITY_KINDS
-
-        for repo, provider in ((AWS, "aws"), (GOOGLE, "google")):
-            unresolved = [
-                d.doc_id
-                for d in iter_documents(repo, provider)
-                if d.kind in ENTITY_KINDS and d.name is None
-            ]
-            assert unresolved == [], f"{provider}: {unresolved[:5]}"
+        docs = {d.doc_id: d for d in iter_documents(PROVIDER_GOOGLE)}
+        assert "google:datasource/dns_record_set" in docs
 
     def test_real_page_chunks_without_phantom_headings(self):
-        docs = {d.doc_id: d for d in iter_documents(AWS, "aws")}
-        chunks = chunk_document(docs["aws:r/instance"])
+        docs = {d.doc_id: d for d in iter_documents(PROVIDER_AWS)}
+        chunks = chunk_document(docs["aws:resource/instance"])
         assert len(chunks) > 5
         # The page contains '# Canonical' inside an HCL example.
         assert not any("Canonical" in c.heading_path for c in chunks)

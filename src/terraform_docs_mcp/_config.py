@@ -12,14 +12,6 @@ from pathlib import Path
 
 __version__ = "0.1.0"
 
-#: Providers indexed by this tool, mapped to their submodule directory name.
-PROVIDERS: dict[str, str] = {
-    "aws": "terraform-provider-aws",
-    "google": "terraform-provider-google",
-}
-
-#: Path within each provider repo holding the user-facing registry docs.
-DOCS_SUBPATH = "website/docs"
 
 #: Glob matching provider documentation files.
 DOC_GLOB = "*.markdown"
@@ -28,6 +20,10 @@ DOC_GLOB = "*.markdown"
 #: ``.html.markdown``, but a handful of Google data-source pages use plain
 #: ``.markdown``.
 DOC_SUFFIXES = (".html.markdown", ".markdown")
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+DATA_DIR = PROJECT_ROOT / "src" / "terraform_docs_mcp" / "_data"
 
 
 def data_dir() -> Path:

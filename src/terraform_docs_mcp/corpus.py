@@ -8,12 +8,13 @@ tool.
 from __future__ import annotations
 
 from enum import StrEnum
+from os import PathLike
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
-from ._config import DOC_GLOB, DOC_SUFFIXES, DOCS_SUBPATH, PROVIDERS
+from ._config import DOC_GLOB, DOC_SUFFIXES, PROJECT_ROOT
 
 # Splitting on h3 as well as h1/h2 matters for this corpus: `Argument Reference`
 # on a large resource page carries a dozen `###` sub-blocks (`CPU Options`,
@@ -53,8 +54,8 @@ _TITLE_ANNOTATION = re.compile(r"\s*\([^)]*\)\s*$")
 ENTITY_KINDS = frozenset({"r", "d", "list-resources", "ephemeral-resources", "actions"})
 
 
-def _clean_heading(text: str) -> str:
-    return _TITLE_NOISE.sub("", text).strip()
+# def _clean_heading(text: str) -> str:
+#     return _TITLE_NOISE.sub("", text).strip()
 
 
 def _strip_doc_suffix(name: str) -> str:
@@ -69,12 +70,59 @@ class Provider(StrEnum):
     google = "google"
 
 
+@dataclass(frozen=True)
+class ProviderConfig:
+    provider: Provider
+    source_docs_dir: Path
+    source_license: Path
+    destination_docs_dir: Path
+
+
+PROVIDER_AWS = ProviderConfig(
+    provider=Provider.aws,
+    source_docs_dir=Path("terraform-provider-aws/website/docs"),
+    source_license=Path("terraform-provider-aws/LICENSE"),
+    destination_docs_dir=Path("docs/aws"),
+)
+PROVIDER_GOOGLE = ProviderConfig(
+    provider=Provider.google,
+    source_docs_dir=Path("terraform-provider-google/website/docs"),
+    source_license=Path("terraform-provider-google/LICENSE"),
+    destination_docs_dir=Path("docs/google"),
+)
+#: Providers indexed by this tool, mapped to their submodule directory name.
+PROVIDERS: dict[str, ProviderConfig] = {
+    "aws": PROVIDER_AWS,
+    "google": PROVIDER_GOOGLE,
+}
+
+
 class Kind(StrEnum):
     resource = "resource"
     datasource = "datasource"
-    guide = "guide"
-    index = "index"
     ephemeral_resource = "ephemeral_resource"
+    list_resource = "list_resource"
+    action = "action"
+    function = "function"
+    guide = "guide"
+
+
+def _parse_kind(s: str) -> Kind | None:
+    if s == "d":
+        return Kind.datasource
+    elif s == "r":
+        return Kind.resource
+    elif s == "functions":
+        return Kind.function
+    elif s == "ephemeral-resources":
+        return Kind.ephemeral_resource
+    elif s == "guides":
+        return Kind.guide
+    elif s == "actions":
+        return Kind.action
+    elif s == "list-resources":
+        return Kind.list_resource
+    return None
 
 
 @dataclass(frozen=True)
@@ -83,8 +131,8 @@ class Document:
 
     doc_id: str  # "aws:r/instance"
     provider: Provider  # "aws" | "google"
-    kind: str  # "r" | "d" | "guides" | ...
-    name: str | None  # "aws_instance"; None for guides and other prose pages
+    kind: Kind  # "r" | "d" | "guides" | ...
+    # name: str | None  # "aws_instance"; None for guides and other prose pages
     title: str
     subcategory: str | None
     description: str | None
@@ -158,34 +206,34 @@ def _parse_frontmatter_fallback(raw: str) -> dict[str, str]:
     return out
 
 
-def _title_and_name(
-    body: str, meta: dict[str, str], stem: str, provider: str, kind: str
-) -> tuple[str, str | None]:
-    """Derive a display title and the terraform identifier for a page."""
-    m = _H1.search(body)
-    raw = m.group(1) if m else meta.get("page_title", stem)
-    heading = _clean_heading(raw)
+# def _title_and_name(
+#     body: str, meta: dict[str, str], stem: str, provider: str, kind: str
+# ) -> tuple[str, str | None]:
+#     """Derive a display title and the terraform identifier for a page."""
+#     m = _H1.search(body)
+#     raw = m.group(1) if m else meta.get("page_title", stem)
+#     heading = _clean_heading(raw)
+#
+#     bare = _clean_heading(_TITLE_PREFIX.sub("", heading))
+#     bare = _TITLE_ANNOTATION.sub("", bare)
+#     if _IDENTIFIER.match(bare):
+#         return heading, bare
+#
+#     # Google's IAM pages title themselves in prose ("IAM policy for Apigee
+#     # Environment") because one page documents the _binding, _member and
+#     # _policy resources together. Fall back to the filename so those pages are
+#     # still reachable by identifier.
+#     if kind in ENTITY_KINDS:
+#         candidate = stem if stem.startswith(f"{provider}_") else f"{provider}_{stem}"
+#         if _IDENTIFIER.match(candidate):
+#             return heading, candidate
+#
+#     return heading, None
 
-    bare = _clean_heading(_TITLE_PREFIX.sub("", heading))
-    bare = _TITLE_ANNOTATION.sub("", bare)
-    if _IDENTIFIER.match(bare):
-        return heading, bare
 
-    # Google's IAM pages title themselves in prose ("IAM policy for Apigee
-    # Environment") because one page documents the _binding, _member and
-    # _policy resources together. Fall back to the filename so those pages are
-    # still reachable by identifier.
-    if kind in ENTITY_KINDS:
-        candidate = stem if stem.startswith(f"{provider}_") else f"{provider}_{stem}"
-        if _IDENTIFIER.match(candidate):
-            return heading, candidate
-
-    return heading, None
-
-
-def iter_documents(repo_root: Path, provider: str) -> Iterator[Document]:
+def iter_documents(provider: ProviderConfig) -> Iterator[Document]:
+    docs_root = PROJECT_ROOT / provider.source_docs_dir
     """Yield every documentation page for one provider."""
-    docs_root = repo_root / DOCS_SUBPATH
     if not docs_root.is_dir():
         raise FileNotFoundError(
             f"{docs_root} not found. Run `make bootstrap` to fetch the submodules."
@@ -194,31 +242,30 @@ def iter_documents(repo_root: Path, provider: str) -> Iterator[Document]:
     for path in sorted(docs_root.rglob(DOC_GLOB)):
         rel = path.relative_to(docs_root)
         # Top-level index.html.markdown has no parent directory to name it.
-        kind = rel.parts[0] if len(rel.parts) > 1 else "index"
-        stem = _strip_doc_suffix(path.name)
+        if len(rel.parts) == 1:
+            continue
+        kind = _parse_kind(rel.parts[0])
+
+        if kind is None:
+            raise ValueError(f"{path} has no known kind")
+
+        title = _strip_doc_suffix(path.name)
 
         raw = path.read_text(encoding="utf-8", errors="replace")
         body, frontmatter = strip_frontmatter(raw)
         meta = _parse_frontmatter(frontmatter)
-        title, name = _title_and_name(body, meta, stem, provider, kind)
+        # title, name = _title_and_name(body, meta, stem, provider, kind)
 
         yield Document(
-            doc_id=f"{provider}:{_strip_doc_suffix(rel.as_posix())}",
-            provider=provider,
+            doc_id=f"{provider}:{kind}:{title}",
+            provider=provider.provider,
             kind=kind,
-            name=name,
             title=title,
             subcategory=meta.get("subcategory") or None,
             description=meta.get("description") or None,
             rel_path=rel.as_posix(),
             body=body,
         )
-
-
-def iter_all_documents(project_root: Path) -> Iterator[Document]:
-    """Yield documents for every configured provider."""
-    for provider, repo in PROVIDERS.items():
-        yield from iter_documents(project_root / repo, provider)
 
 
 def _breadcrumb(doc: Document, headings: list[str]) -> str:
@@ -228,7 +275,7 @@ def _breadcrumb(doc: Document, headings: list[str]) -> str:
     restates the page identifier we already lead with, and repeating it dilutes
     the embedding.
     """
-    head = doc.name or doc.title
+    head = doc.title
     if doc.subcategory:
         head = f"{head} — {doc.subcategory}"
     trail = " > ".join(h for h in headings[1:] if h)
@@ -303,17 +350,12 @@ def _summary_chunk(doc: Document) -> Chunk:
     high-signal passage -- identifier, category and one-line purpose -- that
     such queries can match directly.
     """
-    header = doc.name or doc.title
+    text = doc.title
     if doc.subcategory:
-        header = f"{header} — {doc.subcategory}"
-    # Guides set description equal to their title, and prose pages have the
-    # title as their name; dropping repeats keeps the passage short, which is
-    # the whole point of embedding it separately.
-    seen: list[str] = []
-    for part in (doc.name or "", doc.title, doc.description or ""):
-        if part and part not in seen and part not in header:
-            seen.append(part)
-    text = "\n\n".join([header, *seen]) if seen else header
+        text = f"{text} — {doc.subcategory}"
+    if doc.description:
+        text = f"{text}\n\n{doc.description}"
+
     return Chunk(
         doc_id=doc.doc_id,
         ordinal=0,
