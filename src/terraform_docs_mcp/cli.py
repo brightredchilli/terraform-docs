@@ -19,7 +19,7 @@ from .index import Index, IndexUnavailable
 app = typer.Typer(no_args_is_help=True)
 
 
-# @handle_broken_pipe
+@handle_broken_pipe
 def main() -> int:
     try:
         app()
