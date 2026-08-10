@@ -100,7 +100,13 @@ class SentenceTransformerEmbedder:
         getter = getattr(self._model, "get_embedding_dimension", None) or (
             self._model.get_sentence_embedding_dimension
         )
-        return getter()
+        value = getter()
+        if value is None:
+            raise RuntimeError(
+                f"{MODEL_REPO} did not report an embedding dimension; the saved "
+                "model folder may be incomplete."
+            )
+        return int(value)
 
     def embed_documents(
         self, texts: Sequence[str], batch_size: int = 64, progress: bool = False
@@ -120,7 +126,9 @@ class SentenceTransformerEmbedder:
             convert_to_numpy=True,
             show_progress_bar=progress,
         )
-        return vectors.astype(np.float32, copy=False)
+        # encode_* is overloaded over tensor/array/list/dict returns; asarray
+        # both narrows the type and is a no-op for the array we asked for.
+        return np.asarray(vectors, dtype=np.float32)
 
     def embed_query(self, text: str) -> np.ndarray:
         """Embed a search query. Returns a 1-D unit vector of length ``dim``.
@@ -135,7 +143,7 @@ class SentenceTransformerEmbedder:
             convert_to_numpy=True,
             show_progress_bar=False,
         )
-        return vector.astype(np.float32, copy=False)
+        return np.asarray(vector, dtype=np.float32)
 
 
 def download_model(model_dir: Path) -> Path:

@@ -15,7 +15,7 @@ from typing import Annotated, Any, Literal
 from mcp.server import MCPServer
 from pydantic import Field
 
-from . import __version__
+from ._config import __version__
 from .index import Index, IndexUnavailable
 
 INSTRUCTIONS = """\

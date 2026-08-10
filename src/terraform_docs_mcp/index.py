@@ -14,7 +14,7 @@ from typing import Any, Iterable
 
 import numpy as np
 
-from . import data_dir as _default_data_dir
+from ._config import data_dir as _default_data_dir
 from .embed import MODEL_ID, SentenceTransformerEmbedder
 from .search import (
     aggregate_to_documents,
@@ -114,8 +114,13 @@ class Index:
         if not self._db_path.exists():
             raise IndexUnavailable(
                 f"No search index at {self._db_path}.\n"
-                "This usually means the package was built without one. "
-                "Run `make index` (or `make build`) to generate it."
+                "The installed package was built without one. The index is "
+                "generated rather than committed, so building straight from a "
+                "git checkout or source tree produces a package with no data "
+                "in it.\n"
+                "  In the source tree:  make build   (then install dist/*.whl)\n"
+                "  As a dependency:     depend on the built wheel, not on the "
+                "git repository."
             )
 
     # ---------------------------------------------------------------- lazy
@@ -180,7 +185,9 @@ class Index:
 
     # ------------------------------------------------------------ retrieval
 
-    def _filter_clause(self, provider: str | None, kind: str | None) -> tuple[str, list[Any]]:
+    def _filter_clause(
+        self, provider: str | None, kind: str | None
+    ) -> tuple[str, list[Any]]:
         clauses, params = [], []
         if provider:
             clauses.append("d.provider = ?")
@@ -205,18 +212,26 @@ class Index:
             sql += f" AND {where}"
         # bm25() is negative with better matches more negative, so ascending.
         sql += " ORDER BY bm25(chunks_fts) LIMIT ?"
-        rows = self._conn().execute(sql, [match, *params, CHANNEL_CANDIDATES]).fetchall()
+        rows = (
+            self._conn().execute(sql, [match, *params, CHANNEL_CANDIDATES]).fetchall()
+        )
         return [r["id"] for r in rows]
 
-    def _allowed_rows(self, provider: str | None, kind: str | None) -> np.ndarray | None:
+    def _allowed_rows(
+        self, provider: str | None, kind: str | None
+    ) -> np.ndarray | None:
         """Chunk ids passing the filters, or ``None`` when unfiltered."""
         if not provider and not kind:
             return None
         where, params = self._filter_clause(provider, kind)
-        rows = self._conn().execute(
-            f"SELECT c.id FROM chunks c JOIN documents d ON d.doc_id = c.doc_id WHERE {where}",
-            params,
-        ).fetchall()
+        rows = (
+            self._conn()
+            .execute(
+                f"SELECT c.id FROM chunks c JOIN documents d ON d.doc_id = c.doc_id WHERE {where}",
+                params,
+            )
+            .fetchall()
+        )
         return np.array([r["id"] for r in rows], dtype=np.int64)
 
     def _dense(self, query: str, provider: str | None, kind: str | None) -> list[int]:
@@ -296,7 +311,9 @@ class Index:
             for r in sorted(rows, key=lambda r: _KIND_PRIORITY.get(r["kind"], 2))
         ]
 
-    def _promote(self, doc_ids: list[str], ranked: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _promote(
+        self, doc_ids: list[str], ranked: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """Move the given documents to the front, preserving the rest's order."""
         existing = {e["doc_id"]: e for e in ranked}
         head: list[dict[str, Any]] = []
@@ -307,10 +324,14 @@ class Index:
 
     def _summary_entry(self, doc_id: str) -> dict[str, Any]:
         """Build a result entry for a document neither channel surfaced."""
-        row = self._conn().execute(
-            "SELECT heading_path, snippet FROM chunks WHERE doc_id = ? ORDER BY ordinal LIMIT 1",
-            (doc_id,),
-        ).fetchone()
+        row = (
+            self._conn()
+            .execute(
+                "SELECT heading_path, snippet FROM chunks WHERE doc_id = ? ORDER BY ordinal LIMIT 1",
+                (doc_id,),
+            )
+            .fetchone()
+        )
         return {
             "doc_id": doc_id,
             "score": 0.0,
@@ -323,10 +344,14 @@ class Index:
         if not ids:
             return {}
         placeholders = ",".join("?" * len(ids))
-        rows = self._conn().execute(
-            f"SELECT id, doc_id, heading_path, snippet FROM chunks WHERE id IN ({placeholders})",
-            ids,
-        ).fetchall()
+        rows = (
+            self._conn()
+            .execute(
+                f"SELECT id, doc_id, heading_path, snippet FROM chunks WHERE id IN ({placeholders})",
+                ids,
+            )
+            .fetchall()
+        )
         return {r["id"]: dict(r) for r in rows}
 
     def _decorate(self, ranked: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -334,9 +359,11 @@ class Index:
             return []
         ids = [r["doc_id"] for r in ranked]
         placeholders = ",".join("?" * len(ids))
-        rows = self._conn().execute(
-            f"SELECT * FROM documents WHERE doc_id IN ({placeholders})", ids
-        ).fetchall()
+        rows = (
+            self._conn()
+            .execute(f"SELECT * FROM documents WHERE doc_id IN ({placeholders})", ids)
+            .fetchall()
+        )
         by_id = {r["doc_id"]: dict(r) for r in rows}
 
         out = []
@@ -362,20 +389,23 @@ class Index:
 
     # ------------------------------------------------------------- document
 
-    def get_document(self, doc_id: str, section: str | None = None) -> str:
-        """Return a document's markdown, optionally a single ``##`` section."""
-        row = self._conn().execute(
-            "SELECT provider, rel_path, title FROM documents WHERE doc_id = ?", (doc_id,)
-        ).fetchone()
+    def get_document(self, doc_id: str) -> str:
+        """Return a document's markdown"""
+        row = (
+            self._conn()
+            .execute(
+                "SELECT provider, rel_path, title FROM documents WHERE doc_id = ?",
+                (doc_id,),
+            )
+            .fetchone()
+        )
         if row is None:
             raise KeyError(f"Unknown doc_id: {doc_id!r}")
 
         path = self._dir / "docs" / row["provider"] / row["rel_path"]
         text = path.read_text(encoding="utf-8", errors="replace")
         body = _strip_frontmatter(text)
-        if section is None:
-            return body
-        return _extract_section(body, section, doc_id)
+        return body
 
     def stats(self) -> dict[str, Any]:
         conn = self._conn()
@@ -391,14 +421,16 @@ def _strip_frontmatter(text: str) -> str:
     return text[end + 4 :].lstrip("\n") if end != -1 else text
 
 
-def _extract_section(body: str, section: str, doc_id: str) -> str:
-    import re
-
-    wanted = section.strip().lower().lstrip("#").strip()
-    matches = list(re.finditer(r"^##\s+(.+)$", body, re.MULTILINE))
-    for i, m in enumerate(matches):
-        if m.group(1).strip().lower() == wanted:
-            end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
-            return body[m.start() : end].rstrip()
-    available = ", ".join(m.group(1).strip() for m in matches) or "none"
-    raise KeyError(f"No section {section!r} in {doc_id}. Available sections: {available}")
+# def _extract_section(body: str, section: str, doc_id: str) -> str:
+#     import re
+#
+#     wanted = section.strip().lower().lstrip("#").strip()
+#     matches = list(re.finditer(r"^##\s+(.+)$", body, re.MULTILINE))
+#     for i, m in enumerate(matches):
+#         if m.group(1).strip().lower() == wanted:
+#             end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
+#             return body[m.start() : end].rstrip()
+#     available = ", ".join(m.group(1).strip() for m in matches) or "none"
+#     raise KeyError(
+#         f"No section {section!r} in {doc_id}. Available sections: {available}"
+#     )

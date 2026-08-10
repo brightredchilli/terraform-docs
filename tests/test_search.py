@@ -105,7 +105,7 @@ class TestReciprocalRankFusion:
         channel_a = [1, 2] + list(range(100, 130))
         channel_b = [3, 2] + list(range(200, 228)) + [1]  # 1 is dead last here
         fused = reciprocal_rank_fusion([channel_a, channel_b])
-        assert max(fused, key=fused.get) == 2
+        assert max(fused, key=lambda k: fused[k]) == 2
 
     def test_top_of_one_channel_survives_absence_from_the_other(self):
         # The complement of the case above: a strong single-channel hit still

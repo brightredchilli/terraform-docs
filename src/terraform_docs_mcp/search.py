@@ -170,16 +170,16 @@ def aggregate_to_documents(
     return ranked[:limit]
 
 
-def format_results(results: Iterable[Mapping[str, Any]]) -> str:
-    """Render results as plain text for the CLI."""
-    lines = []
-    for i, r in enumerate(results, start=1):
-        label = r.get("name") or r.get("title")
-        subcat = f" [{r['subcategory']}]" if r.get("subcategory") else ""
-        lines.append(f"{i:2}. {label}  ({r['provider']}/{r['kind']}){subcat}")
-        lines.append(f"    {r['doc_id']}  score={r['score']:.4f}")
-        if r.get("heading"):
-            lines.append(f"    § {r['heading']}")
-        lines.append(f"    {r['snippet']}")
-        lines.append("")
-    return "\n".join(lines) if lines else "No results."
+# def format_results(results: Iterable[Mapping[str, Any]]) -> str:
+#     """Render results as plain text for the CLI."""
+#     lines = []
+#     for i, r in enumerate(results, start=1):
+#         label = r.get("name") or r.get("title")
+#         subcat = f" [{r['subcategory']}]" if r.get("subcategory") else ""
+#         lines.append(f"{i:2}. {label}  ({r['provider']}/{r['kind']}){subcat}")
+#         lines.append(f"    {r['doc_id']}  score={r['score']:.4f}")
+#         if r.get("heading"):
+#             lines.append(f"    § {r['heading']}")
+#         lines.append(f"    {r['snippet']}")
+#         lines.append("")
+#     return "\n".join(lines) if lines else "No results."

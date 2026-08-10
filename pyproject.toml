@@ -3,7 +3,7 @@ name = "terraform-docs-mcp"
 version = "0.1.0"
 description = "Offline MCP server for hybrid search over Terraform AWS and Google provider documentation"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 license = "MPL-2.0"
 license-files = ["LICENSE", "NOTICE"]
 
@@ -17,11 +17,12 @@ dependencies = [
     # Needed at query time as well as index time, so it cannot be build-only:
     # every search embeds its query with the same model that built the index.
     "sentence-transformers>=5.0",
+    "typer>=0.27.1",
 ]
 
 [project.scripts]
 terraform-docs-mcp = "terraform_docs_mcp.server:main"
-terraform-docs-search = "terraform_docs_mcp.cli:main"
+cli = "terraform_docs_mcp.cli:main"
 
 [dependency-groups]
 build = [
@@ -30,6 +31,7 @@ build = [
     "pyyaml>=6",
 ]
 dev = [
+    "basedpyright>=1.31",
     "pytest>=8",
 ]
 

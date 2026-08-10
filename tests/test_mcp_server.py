@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from terraform_docs_mcp import data_dir
+from terraform_docs_mcp._config import data_dir
 
 pytestmark = pytest.mark.skipif(
     not (data_dir() / "index.sqlite3").exists(),

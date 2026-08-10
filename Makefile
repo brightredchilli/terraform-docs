@@ -1,7 +1,7 @@
 PYTHON_VERSION := 3.14
 DATA_DIR := src/terraform_docs_mcp/_data
 
-.PHONY: help bootstrap sync index build install test clean distclean
+.PHONY: help bootstrap sync index build install test typecheck check clean distclean
 
 help:
 	@echo "bootstrap  fetch submodules and sparse-checkout just the docs"
@@ -10,6 +10,8 @@ help:
 	@echo "build      build the wheel (runs index first)"
 	@echo "install    install the tool locally via uv"
 	@echo "test       run the test suite"
+	@echo "typecheck  run basedpyright against pyrightconfig.json"
+	@echo "check      typecheck + test"
 	@echo "clean      remove the generated index"
 
 # Sparse-checkout config is not recorded in .gitmodules, so a fresh clone gets
@@ -41,6 +43,12 @@ install: build
 
 test: sync
 	uv run pytest -q
+
+# Uses the repo's pyrightconfig.json (standard mode, reportArgumentType=error).
+typecheck: sync
+	uv run basedpyright src tests
+
+check: typecheck test
 
 clean:
 	rm -rf $(DATA_DIR) dist

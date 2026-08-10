@@ -1,0 +1,10 @@
+{
+  "typeCheckingMode": "standard",
+  "reportArgumentType": "error",
+  "executionEnvironments": [
+    {
+      "root": "**/tests",
+      "reportGeneralTypeIssues": false
+    }
+  ]
+}

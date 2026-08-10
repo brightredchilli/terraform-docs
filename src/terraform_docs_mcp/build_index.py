@@ -20,7 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import PROVIDERS
+from ._config import PROVIDERS
 from .corpus import chunk_document, iter_documents
 from .embed import MODEL_ID, SentenceTransformerEmbedder, download_model
 from .index import INDEX_FILENAME, SCHEMA, VECTORS_FILENAME, quantize

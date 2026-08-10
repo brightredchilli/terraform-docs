@@ -1,34 +1,25 @@
-"""Offline hybrid search over Terraform provider documentation."""
+"""Offline hybrid search over Terraform provider documentation.
+
+Usable as a library as well as an MCP server:
+
+    from terraform_docs_mcp import Index
+
+    index = Index()
+    for hit in index.search("s3 bucket lifecycle", provider="aws", limit=5):
+        print(hit["doc_id"], hit["snippet"])
+    print(index.get_document(hit["doc_id"], section="Argument Reference"))
+
+``Index`` is safe to share across threads and holds no per-request state, but
+the first search loads an embedding model -- build one per process and reuse it.
+
+This module is a facade over the public API and nothing else. Shared constants
+and paths live in ``_config`` so that submodules never import from the package
+root, which would make the root unable to re-export ``Index``.
+"""
 
 from __future__ import annotations
 
-from importlib.resources import files
-from pathlib import Path
+from ._config import __version__
+from .index import Index, IndexUnavailable
 
-__version__ = "0.1.0"
-
-#: Providers indexed by this tool, mapped to their submodule directory name.
-PROVIDERS: dict[str, str] = {
-    "aws": "terraform-provider-aws",
-    "google": "terraform-provider-google",
-}
-
-#: Path within each provider repo holding the user-facing registry docs.
-DOCS_SUBPATH = "website/docs"
-
-#: Glob matching provider documentation files.
-DOC_GLOB = "*.markdown"
-
-#: Suffixes documentation files carry, longest first. Most use
-#: ``.html.markdown``, but a handful of Google data-source pages use plain
-#: ``.markdown``.
-DOC_SUFFIXES = (".html.markdown", ".markdown")
-
-
-def data_dir() -> Path:
-    """Locate the packaged ``_data`` directory.
-
-    Wheels install unpacked, so this resolves to a real directory on disk and
-    the vector array can be memory-mapped without copying.
-    """
-    return Path(str(files(__package__) / "_data"))
+__all__ = ["Index", "IndexUnavailable", "__version__"]

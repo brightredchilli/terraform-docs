@@ -7,12 +7,13 @@ tool.
 
 from __future__ import annotations
 
+from enum import StrEnum
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
-from . import DOC_GLOB, DOC_SUFFIXES, DOCS_SUBPATH, PROVIDERS
+from ._config import DOC_GLOB, DOC_SUFFIXES, DOCS_SUBPATH, PROVIDERS
 
 # Splitting on h3 as well as h1/h2 matters for this corpus: `Argument Reference`
 # on a large resource page carries a dozen `###` sub-blocks (`CPU Options`,
@@ -63,12 +64,25 @@ def _strip_doc_suffix(name: str) -> str:
     return name
 
 
+class Provider(StrEnum):
+    aws = "aws"
+    google = "google"
+
+
+class Kind(StrEnum):
+    resource = "resource"
+    datasource = "datasource"
+    guide = "guide"
+    index = "index"
+    ephemeral_resource = "ephemeral_resource"
+
+
 @dataclass(frozen=True)
 class Document:
     """A single provider documentation page."""
 
     doc_id: str  # "aws:r/instance"
-    provider: str  # "aws" | "google"
+    provider: Provider  # "aws" | "google"
     kind: str  # "r" | "d" | "guides" | ...
     name: str | None  # "aws_instance"; None for guides and other prose pages
     title: str
@@ -76,6 +90,19 @@ class Document:
     description: str | None
     rel_path: str  # "r/instance.html.markdown"
     body: str  # frontmatter removed
+
+
+@dataclass(frozen=True)
+class _Section:
+    """One heading-delimited span, normalised from the splitter's output.
+
+    The splitter returns langchain ``Document`` objects; normalising into this
+    lets the headingless fallback be an ordinary value rather than a synthesised
+    stand-in object.
+    """
+
+    page_content: str
+    metadata: dict[str, str]
 
 
 @dataclass(frozen=True)
@@ -230,9 +257,10 @@ def chunk_document(doc: Document) -> list[Chunk]:
         chunk_overlap=CHUNK_OVERLAP_CHARS,
     )
 
-    sections = header_splitter.split_text(doc.body)
-    if not sections:  # a page with no headings at all
-        sections = [type("S", (), {"page_content": doc.body, "metadata": {}})()]
+    sections = [
+        _Section(s.page_content, {str(k): str(v) for k, v in s.metadata.items()})
+        for s in header_splitter.split_text(doc.body)
+    ] or [_Section(doc.body, {})]  # a page with no headings at all
 
     chunks: list[Chunk] = [_summary_chunk(doc)]
     for section in sections:
