@@ -8,6 +8,7 @@ request is self-contained and no session is tracked.
 
 from __future__ import annotations
 
+from enum import StrEnum
 import threading
 from typing import Annotated, Any
 
@@ -28,6 +29,14 @@ Use `search` to find the relevant documentation pages, then `get_document` to
 read one. Prefer requesting a specific `section` (for example "Argument
 Reference") over fetching a whole page, since the largest pages are very long.
 """
+
+
+class Transport(StrEnum):
+    """How the MCP server talks to its client."""
+
+    stdio = "stdio"
+    http = "http"
+
 
 mcp = MCPServer(
     name="terraform-docs",
@@ -103,24 +112,19 @@ def terraform_mcp_get_document(
         raise ValueError(str(exc.args[0]) if exc.args else str(exc)) from exc
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--transport",
-        choices=("stdio", "http"),
-        default="stdio",
-        help="stdio (default) for a local MCP client; http to serve over Streamable HTTP.",
-    )
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8000)
-    args = parser.parse_args(argv)
+def serve(
+    transport: Transport = Transport.stdio, host: str = "127.0.0.1", port: int = 8000
+) -> None:
+    """Run the server until the transport closes.
 
-    try:
-        get_index()
-    except IndexUnavailable as exc:
-        parser.exit(2, f"error: {exc}\n")
+    Command-line parsing lives in :mod:`terraform_docs_mcp.cli`; this is the
+    plain function underneath it. Raises :class:`IndexUnavailable` if the
+    packaged index is missing -- deliberately before any client handshake, so a
+    broken install fails visibly at startup rather than on the first search.
+    """
+    get_index()
 
-    if args.transport == "stdio":
+    if transport == "stdio":
         mcp.run(transport="stdio")
     else:
         # Stateless: no session id, no persistent server->client stream, so
@@ -129,12 +133,7 @@ def main(argv: list[str] | None = None) -> int:
         # read-only tools use.
         mcp.run(
             transport="streamable-http",
-            host=args.host,
-            port=args.port,
+            host=host,
+            port=port,
             stateless_http=True,
         )
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

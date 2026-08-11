@@ -33,7 +33,7 @@ async def _call(tool: str, arguments: dict):
 
     params = StdioServerParameters(
         command=sys.executable,
-        args=["-m", "terraform_docs_mcp.server"],
+        args=["-m", "terraform_docs_mcp.cli", "serve"],
         cwd=str(PROJECT_ROOT),
     )
     async with stdio_client(params) as (read, write):
@@ -63,12 +63,14 @@ def _rows_of(result) -> list[dict]:
 
 class TestOverStdio:
     def test_tools_are_advertised(self):
-        tools, _ = _run("search", {"query": "aws_instance", "limit": 1})
+        tools, _ = _run("terraform_mcp_search", {"query": "aws_instance", "limit": 1})
         names = {t.name for t in tools.tools}
-        assert names == {"search", "get_document"}
+        assert names == {"terraform_mcp_search", "terraform_mcp_get_document"}
 
     def test_search_returns_documents(self):
-        _, result = _run("search", {"query": "s3 bucket lifecycle expiration", "limit": 5})
+        _, result = _run(
+            "terraform_mcp_search", {"query": "s3 bucket lifecycle expiration", "limit": 5}
+        )
         assert not result.is_error
         rows = _rows_of(result)
         assert rows, "no results returned over MCP"

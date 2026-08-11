@@ -17,6 +17,7 @@ from terraform_docs_mcp.util import all_values, handle_broken_pipe
 
 from .index import Index, IndexUnavailable
 from .build_index import build as _build_index
+from .server import Transport, serve as _serve
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -87,11 +88,44 @@ def search(
 
 
 @app.command()
-def build():
+def serve(
+    transport: Annotated[
+        Transport,
+        typer.Option(help="stdio for a local MCP client; http for Streamable HTTP."),
+    ] = Transport.stdio,
+    host: Annotated[
+        str, typer.Option(help="Bind address, http transport only.")
+    ] = "127.0.0.1",
+    port: Annotated[int, typer.Option(help="Port, http transport only.")] = 8000,
+):
     """
-    Build the packaged search index
+    Run the MCP server.
+
+    stdio is what a local MCP client launches; http serves the same tools in
+    stateless mode so requests can be spread across replicas.
     """
-    _build_index()
+    try:
+        _serve(transport=transport, host=host, port=port)
+    except IndexUnavailable as exc:
+        # stderr, never stdout: on the stdio transport anything written to
+        # stdout that is not JSON-RPC corrupts the protocol stream.
+        print(f"error: {exc}", file=sys.stderr)
+        raise typer.Exit(2)
+
+
+@handle_broken_pipe
+def serve_main() -> int:
+    """Entry point for the ``terraform-docs-mcp`` alias.
+
+    Kept so MCP client configurations naming that executable keep working.
+    ``typer.run`` builds a one-command app around ``serve``, so the flags are
+    identical to ``terraform-docs serve``.
+    """
+    try:
+        typer.run(serve)
+    except KeyboardInterrupt:
+        return 130
+    return 0
 
 
 if __name__ == "__main__":

@@ -21,8 +21,8 @@ dependencies = [
 ]
 
 [project.scripts]
-terraform-docs-mcp = "terraform_docs_mcp.server:main"
-cli = "terraform_docs_mcp.cli:main"
+terraform-docs = "terraform_docs_mcp.cli:main"
+terraform-docs-probe = "terraform_docs_mcp.probe:main"
 
 [dependency-groups]
 build = [

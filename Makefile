@@ -50,6 +50,13 @@ typecheck: sync
 
 check: typecheck test
 
+# Exercise the stdio MCP server end to end: handshake, tool discovery, and an
+# actual tool call. Point it at whatever your client launches, e.g.
+#   make probe PROBE_ARGS='--command "uvx --from=./dist/*.whl terraform-docs serve"'
+PROBE_ARGS ?=
+probe: sync
+	uv run terraform-docs-probe $(PROBE_ARGS)
+
 clean:
 	rm -rf $(DATA_DIR) dist
 

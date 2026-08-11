@@ -19,7 +19,7 @@ make install     # uv tool install .
 ## Register with an MCP client
 
 ```bash
-claude mcp add terraform-docs -- terraform-docs-mcp
+claude mcp add terraform-docs -- terraform-docs serve
 ```
 
 Or by configuration file:
@@ -27,7 +27,7 @@ Or by configuration file:
 ```json
 {
   "mcpServers": {
-    "terraform-docs": { "command": "terraform-docs-mcp" }
+    "terraform-docs": { "command": "terraform-docs", "args": ["serve"] }
   }
 }
 ```
@@ -36,22 +36,26 @@ The server speaks stdio by default. `--transport http` serves Streamable HTTP
 in stateless mode instead, so requests can be spread across replicas without
 sticky sessions.
 
+`terraform-docs-mcp` remains as an alias for `terraform-docs serve`, with the
+same flags, so existing client configurations keep working.
+
 ## Tools
 
 | Tool | Purpose |
 |---|---|
-| `search(query, provider=None, kind=None, limit=10)` | Ranked list of matching documents with a snippet |
-| `get_document(doc_id, section=None)` | Full markdown for a document, or one `##` section |
+| `terraform_mcp_search(query, provider=None, kind=None, limit=10)` | Ranked list of matching documents with a snippet |
+| `terraform_mcp_get_document(doc_id)` | Full markdown for a document |
 
-`kind` filters by document type: `r` (resources), `d` (data sources), `guides`,
-`functions`, `ephemeral-resources`, `list-resources`, `actions`.
+`kind` filters by document type: `resource`, `datasource`, `guide`, `function`,
+`ephemeral_resource`, `list_resource`, `action`. Document ids are
+`provider:kind:stem`, e.g. `aws:resource:instance`.
 
 ## How search works
 
 Two channels run over the same chunks and are combined with reciprocal rank
 fusion, then rolled up so each document appears once:
 
-- **BM25** (SQLite FTS5, Porter-stemmed) carries exact identifiers such as
+- **BM25** (SQLite FTS5, `unicode61`) carries exact identifiers such as
   `aws_s3_bucket`.
 - **Vector similarity** (`mxbai-embed-xsmall-v1` via sentence-transformers)
   carries paraphrases such as *"how do I delete old objects automatically"*,
@@ -125,7 +129,7 @@ config at build time, so runtime code carries no model-specific knowledge.
 ## Rebuilding
 
 `make index` re-reads the submodules and regenerates everything. The index
-records the commit SHA of each provider repo (`terraform-docs-search --stats`),
+records the commit SHA of each provider repo (`terraform-docs stats`),
 so you can tell which upstream revision a given artifact was built from.
 
 ## Use as a library
@@ -139,7 +143,7 @@ index = Index()                       # loads the packaged index
 for hit in index.search("s3 bucket lifecycle", provider="aws", limit=5):
     print(hit["doc_id"], hit["score"], hit["snippet"])
 
-print(index.get_document("aws:r/s3_bucket", section="Argument Reference"))
+print(index.get_document("aws:resource:s3_bucket"))
 ```
 
 `Index` is safe to share across threads and keeps no per-request state, but the
@@ -179,10 +183,28 @@ Two smaller notes:
 - The package ships `py.typed`, so annotations are visible to type checkers in
   consuming projects.
 
+## Checking the stdio server
+
+`terraform-docs-probe` spawns the server and speaks raw JSON-RPC to it, so it
+exercises the same path an MCP client does. It separates the phases, because
+"boots and lists tools but calls fail" is a different problem from "never
+starts" — discovery is answered from static metadata, while the first call also
+loads the embedding model and reads the index.
+
+```bash
+make probe                                                    # this package's server
+terraform-docs-probe -- /path/to/terraform-docs serve         # a specific binary
+terraform-docs-probe --command "uvx --from=./dist/*.whl terraform-docs serve"
+terraform-docs-probe --tool terraform_mcp_search --args '{"query":"vpc"}'
+```
+
+It reports timings per phase, surfaces the server's stderr on failure, and
+flags non-JSON output on stdout — which silently corrupts the stdio protocol.
+
 ## Debugging without an MCP client
 
 ```bash
-terraform-docs-search "s3 bucket lifecycle expiration"
+terraform-docs search "s3 bucket lifecycle expiration"
 ```
 
 ## Licensing

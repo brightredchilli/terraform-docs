@@ -85,6 +85,7 @@ enough that tuning parameters against it fits noise. Prefer structural fixes.
 | `make check` | typecheck + tests |
 | `make build` | wheel (runs `index` first — `uv_build` has no build hooks) |
 | `make install` | `uv tool install` locally |
+| `make probe` | exercise the stdio MCP server end to end |
 
 ## Layout
 
@@ -95,8 +96,9 @@ src/terraform_docs_mcp/
   embed.py       sentence-transformers wrapper
   index.py       sqlite + vectors, hybrid search
   search.py      query prep, RRF fusion, aggregation (pure functions)
-  server.py      MCP server
-  cli.py         terminal search, for debugging
+  server.py      MCP tools + serve(); no argument parsing
+  cli.py         typer app: search/get/stats/build/serve — all entry points
+  probe.py       stdio MCP diagnostic
   build_index.py index builder                  (build-time only)
   _data/         GENERATED — never committed, always shipped
 ```
