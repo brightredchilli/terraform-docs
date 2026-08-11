@@ -231,8 +231,8 @@ def _parse_frontmatter_fallback(raw: str) -> dict[str, str]:
 #     return heading, None
 
 
-def iter_documents(provider: ProviderConfig) -> Iterator[Document]:
-    docs_root = PROJECT_ROOT / provider.source_docs_dir
+def iter_documents(config: ProviderConfig) -> Iterator[Document]:
+    docs_root = PROJECT_ROOT / config.source_docs_dir
     """Yield every documentation page for one provider."""
     if not docs_root.is_dir():
         raise FileNotFoundError(
@@ -257,8 +257,8 @@ def iter_documents(provider: ProviderConfig) -> Iterator[Document]:
         # title, name = _title_and_name(body, meta, stem, provider, kind)
 
         yield Document(
-            doc_id=f"{provider}:{kind}:{title}",
-            provider=provider.provider,
+            doc_id=f"{config.provider.value}:{kind}:{title}",
+            provider=config.provider,
             kind=kind,
             title=title,
             subcategory=meta.get("subcategory") or None,

@@ -76,18 +76,13 @@ class TestOverStdio:
         assert {"doc_id", "provider", "kind", "snippet", "score"} <= set(rows[0])
 
     def test_search_honours_provider_filter(self):
-        _, result = _run("search", {"query": "instance", "provider": "google", "limit": 5})
+        _, result = _run(
+            "terraform_mcp_search", {"query": "instance", "provider": "google", "limit": 5}
+        )
         assert not result.is_error
         assert {r["provider"] for r in _rows_of(result)} == {"google"}
 
-    def test_get_document_section(self):
-        _, result = _run(
-            "get_document", {"doc_id": "aws:r/instance", "section": "Argument Reference"}
-        )
-        assert not result.is_error
-        assert _text_of(result).startswith("## Argument Reference")
-
     def test_unknown_document_is_a_tool_error(self):
-        _, result = _run("get_document", {"doc_id": "aws:r/nope"})
+        _, result = _run("terraform_mcp_get_document", {"doc_id": "aws:resource:nope"})
         assert result.is_error
         assert "nope" in _text_of(result)

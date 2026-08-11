@@ -4,6 +4,7 @@ Exists so retrieval can be exercised and tuned without wiring up an MCP client.
 """
 
 import json
+from enum import StrEnum
 from pathlib import Path
 import sys
 from typing import Annotated

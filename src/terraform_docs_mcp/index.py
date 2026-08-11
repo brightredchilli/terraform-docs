@@ -42,7 +42,7 @@ _IDENTIFIER_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 
 #: Resources are the usual intent when a bare identifier is searched; data
 #: sources share the same name and should follow rather than displace them.
-_KIND_PRIORITY = {"r": 0, "d": 1}
+_KIND_PRIORITY = {"resource": 0, "datasource": 1}
 
 SCHEMA = """
 CREATE TABLE meta (
@@ -54,7 +54,6 @@ CREATE TABLE documents (
     doc_id      TEXT PRIMARY KEY,
     provider    TEXT NOT NULL,
     kind        TEXT NOT NULL,
-    name        TEXT,
     title       TEXT NOT NULL,
     subcategory TEXT,
     description TEXT,
@@ -62,7 +61,6 @@ CREATE TABLE documents (
 );
 CREATE INDEX idx_documents_provider ON documents(provider);
 CREATE INDEX idx_documents_kind     ON documents(kind);
-CREATE INDEX idx_documents_name     ON documents(name);
 
 -- chunks.id is 1-based and dense: vectors row i corresponds to chunk id i + 1.
 CREATE TABLE chunks (
@@ -74,9 +72,8 @@ CREATE TABLE chunks (
 );
 CREATE INDEX idx_chunks_doc ON chunks(doc_id);
 
--- Contentless: FTS5 keeps the inverted index but not the text, since the full
+-- External content: FTS5 keeps the inverted index but not the text, since the full
 -- markdown already ships alongside and chunk snippets live in `chunks`.
--- Porter stemming lets "expiration" match "expire".
 CREATE VIRTUAL TABLE chunks_fts USING fts5(
     text,
     content='',
@@ -376,7 +373,7 @@ class Index:
                     "doc_id": doc["doc_id"],
                     "provider": doc["provider"],
                     "kind": doc["kind"],
-                    "name": doc["name"],
+                    # "name": doc["name"],
                     "title": doc["title"],
                     "subcategory": doc["subcategory"],
                     "description": doc["description"],

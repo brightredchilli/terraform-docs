@@ -8,12 +8,14 @@ request is self-contained and no session is tracked.
 
 from __future__ import annotations
 
-import argparse
 import threading
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
 from mcp.server import MCPServer
 from pydantic import Field
+
+from terraform_docs_mcp.corpus import Kind, Provider
+from terraform_docs_mcp.util import all_values
 
 from ._config import __version__
 from .index import Index, IndexUnavailable
@@ -56,22 +58,20 @@ def get_index() -> Index:
 
 
 @mcp.tool()
-def search(
+def terraform_mcp_search(
     query: Annotated[
         str, Field(description="Natural-language question or Terraform identifier.")
     ],
     provider: Annotated[
-        Literal["aws", "google"] | None,
-        Field(description="Restrict results to one provider."),
+        str | None,
+        Field(
+            description=f"Restrict results to one provider. Optional. Supported values: {all_values(Provider)}"
+        ),
     ] = None,
     kind: Annotated[
         str | None,
         Field(
-            description=(
-                "Restrict to a document kind: 'r' (resources), 'd' (data sources), "
-                "'guides', 'functions', 'ephemeral-resources', 'list-resources', "
-                "'actions'."
-            )
+            description=f"Restrict to a document kind. Optional. Values: {all_values(Kind)}"
         ),
     ] = None,
     limit: Annotated[int, Field(description="Maximum documents to return.")] = 10,
@@ -89,20 +89,11 @@ def search(
 
 
 @mcp.tool()
-def get_document(
+def terraform_mcp_get_document(
     doc_id: Annotated[
-        str, Field(description="Document id from `search`, e.g. 'aws:r/instance'.")
+        str,
+        Field(description="Document id from `search`, e.g. 'aws:resource:instance'."),
     ],
-    section: Annotated[
-        str | None,
-        Field(
-            description=(
-                "Return only this top-level section, e.g. 'Argument Reference', "
-                "'Example Usage', 'Attribute Reference', 'Import'. Omit for the "
-                "whole page."
-            )
-        ),
-    ] = None,
 ) -> str:
     """Return the markdown for one documentation page"""
     try:

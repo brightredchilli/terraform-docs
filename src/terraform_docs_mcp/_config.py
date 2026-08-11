@@ -10,7 +10,7 @@ from __future__ import annotations
 from importlib.resources import files
 from pathlib import Path
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 
 #: Glob matching provider documentation files.

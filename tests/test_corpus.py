@@ -60,7 +60,7 @@ class TestChunking:
     @staticmethod
     def _doc(body: str) -> Document:
         return Document(
-            doc_id="aws:r/example",
+            doc_id="aws:resource:example",
             provider=Provider.aws,
             kind=Kind.resource,
             title="Resource: aws_example",
@@ -144,7 +144,7 @@ class TestChunking:
 
     def test_summary_chunk_does_not_repeat_itself(self):
         doc = Document(
-            doc_id="aws:guides/x",
+            doc_id="aws:guide:x",
             provider=Provider.aws,
             kind=Kind.guide,
             title="Upgrade Guide",
@@ -160,7 +160,7 @@ class TestChunking:
 class TestRealCorpus:
     def test_aws_resource_metadata(self):
         docs = {d.doc_id: d for d in iter_documents(PROVIDER_AWS)}
-        doc = docs["aws:resource/instance"]
+        doc = docs["aws:resource:instance"]
         assert doc.kind == Kind.resource
         assert doc.subcategory and "EC2" in doc.subcategory
 
@@ -168,18 +168,18 @@ class TestRealCorpus:
         """Google wraps identifiers in backticks: `google_bigquery_dataset`."""
         docs = {d.doc_id: d for d in iter_documents(PROVIDER_GOOGLE)}
         assert (
-            docs["google:datasource/bigquery_dataset"].title
+            docs["google:datasource:bigquery_dataset"].title
             == "google_bigquery_dataset"
         )
 
     def test_plain_markdown_suffix_is_picked_up(self):
         """A handful of Google pages use .markdown, not .html.markdown."""
         docs = {d.doc_id: d for d in iter_documents(PROVIDER_GOOGLE)}
-        assert "google:datasource/dns_record_set" in docs
+        assert "google:datasource:dns_record_set" in docs
 
     def test_real_page_chunks_without_phantom_headings(self):
         docs = {d.doc_id: d for d in iter_documents(PROVIDER_AWS)}
-        chunks = chunk_document(docs["aws:resource/instance"])
+        chunks = chunk_document(docs["aws:resource:instance"])
         assert len(chunks) > 5
         # The page contains '# Canonical' inside an HCL example.
         assert not any("Canonical" in c.heading_path for c in chunks)

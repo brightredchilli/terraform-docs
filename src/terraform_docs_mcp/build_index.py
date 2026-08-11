@@ -50,16 +50,15 @@ def _copy_docs() -> None:
 
     Copied rather than symlinked: the submodules do not exist inside a wheel.
     """
-    data_dir = PROJECT_ROOT / "_data"
     for config in PROVIDERS.values():
         src = PROJECT_ROOT / config.source_docs_dir
-        dst = data_dir / config.destination_docs_dir
+        dst = DATA_DIR / config.destination_docs_dir
         if dst.exists():
             shutil.rmtree(dst)
         shutil.copytree(src, dst)
 
         license_src = PROJECT_ROOT / config.source_license
-        license_dst = data_dir / config.destination_docs_dir
+        license_dst = DATA_DIR / config.destination_docs_dir
         license_dst.mkdir(parents=True, exist_ok=True)
         if license_src.exists():
             shutil.copyfile(license_src, license_dst / "LICENSE")
@@ -120,7 +119,7 @@ def _write_db(documents: Sequence[Document], chunks, dim: int) -> None:
             [
                 (
                     d.doc_id,
-                    d.provider,
+                    d.provider.value,
                     d.kind,
                     d.title,
                     d.subcategory,

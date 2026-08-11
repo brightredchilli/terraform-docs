@@ -32,25 +32,25 @@ def index() -> Index:
 # the provider from the wording is part of what should work.
 RECALL_CASES = [
     # -- exact identifier -------------------------------------------------
-    ("aws_instance", None, "aws:r/instance"),
-    ("google_compute_firewall", None, "google:r/compute_firewall"),
-    ("aws_lambda_function", None, "aws:r/lambda_function"),
+    ("aws_instance", None, "aws:resource:instance"),
+    ("google_compute_firewall", None, "google:resource:compute_firewall"),
+    ("aws_lambda_function", None, "aws:resource:lambda_function"),
     # -- attribute level --------------------------------------------------
-    ("s3 bucket lifecycle expiration rules", None, "aws:r/s3_bucket_lifecycle_configuration"),
-    ("iam role assume role policy document", None, "aws:r/iam_role"),
-    ("rds db instance backup retention period", None, "aws:r/db_instance"),
-    ("gke cluster node pool configuration", None, "google:r/container_cluster"),
+    ("s3 bucket lifecycle expiration rules", None, "aws:resource:s3_bucket_lifecycle_configuration"),
+    ("iam role assume role policy document", None, "aws:resource:iam_role"),
+    ("rds db instance backup retention period", None, "aws:resource:db_instance"),
+    ("gke cluster node pool configuration", None, "google:resource:container_cluster"),
     # -- paraphrase, provider stated in the query -------------------------
-    ("create a virtual machine in google cloud", None, "google:r/compute_instance"),
-    ("managed relational database in google cloud", None, "google:r/sql_database_instance"),
-    ("allow inbound traffic on a port in gcp", None, "google:r/compute_firewall"),
-    ("object storage bucket on google cloud", None, "google:r/storage_bucket"),
-    ("grant an aws service permission to act on my behalf", None, "aws:r/iam_role"),
+    ("create a virtual machine in google cloud", None, "google:resource:compute_instance"),
+    ("managed relational database in google cloud", None, "google:resource:sql_database_instance"),
+    ("allow inbound traffic on a port in gcp", None, "google:resource:compute_firewall"),
+    ("object storage bucket on google cloud", None, "google:resource:storage_bucket"),
+    ("grant an aws service permission to act on my behalf", None, "aws:resource:iam_role"),
     # -- paraphrase, provider-agnostic wording (scoped) -------------------
     ("how do I automatically delete old files in a bucket", "aws",
-     "aws:r/s3_bucket_lifecycle_configuration"),
-    ("run code without managing servers", "aws", "aws:r/lambda_function"),
-    ("look up an existing machine image to boot from", "aws", "aws:d/ami"),
+     "aws:resource:s3_bucket_lifecycle_configuration"),
+    ("run code without managing servers", "aws", "aws:resource:lambda_function"),
+    ("look up an existing machine image to boot from", "aws", "aws:datasource:ami"),
 ]
 
 # Queries the retriever is measurably weak on, kept in the suite rather than
@@ -111,25 +111,25 @@ class TestFilters:
         assert {r["provider"] for r in results} == {"google"}
 
     def test_kind_filter(self, index: Index):
-        results = index.search("ami image", kind="d", limit=10)
+        results = index.search("ami image", kind="datasource", limit=10)
         assert results
-        assert {r["kind"] for r in results} == {"d"}
+        assert {r["kind"] for r in results} == {"datasource"}
 
     def test_narrow_filter_still_fills_results(self, index: Index):
         """Filtering must happen inside each channel, not after the top-k.
 
-        `functions` covers only a handful of documents corpus-wide. If the
+        `function` covers only a handful of documents corpus-wide. If the
         filter were applied after taking the top-60 candidates, an unrelated
         query would return nothing at all.
         """
-        results = index.search("parse an arn", kind="functions", limit=5)
+        results = index.search("parse an arn", kind="function", limit=5)
         assert results, "post-filtering would have emptied this result set"
-        assert {r["kind"] for r in results} == {"functions"}
+        assert {r["kind"] for r in results} == {"function"}
 
     def test_combined_filters(self, index: Index):
-        results = index.search("network", provider="aws", kind="r", limit=5)
+        results = index.search("network", provider="aws", kind="resource", limit=5)
         assert results
-        assert all(r["provider"] == "aws" and r["kind"] == "r" for r in results)
+        assert all(r["provider"] == "aws" and r["kind"] == "resource" for r in results)
 
     def test_impossible_filter_returns_empty(self, index: Index):
         assert index.search("anything", kind="does-not-exist", limit=5) == []
@@ -157,35 +157,23 @@ class TestQueryHandling:
     def test_results_carry_expected_fields(self, index: Index):
         r = index.search("aws_instance", limit=1)[0]
         assert set(r) >= {
-            "doc_id", "provider", "kind", "name", "title", "snippet", "score",
+            "doc_id", "provider", "kind", "title", "snippet", "score",
         }
         assert r["snippet"]
 
 
 class TestGetDocument:
     def test_returns_full_markdown(self, index: Index):
-        text = index.get_document("aws:r/instance")
+        text = index.get_document("aws:resource:instance")
         assert text.startswith("# Resource: aws_instance")
         assert "## Argument Reference" in text
 
     def test_frontmatter_is_stripped(self, index: Index):
-        assert not index.get_document("aws:r/instance").startswith("---")
-
-    def test_section_extraction(self, index: Index):
-        section = index.get_document("aws:r/instance", section="Argument Reference")
-        assert section.startswith("## Argument Reference")
-        assert "## Attribute Reference" not in section
-
-    def test_section_is_case_insensitive(self, index: Index):
-        assert index.get_document("aws:r/instance", section="argument reference")
+        assert not index.get_document("aws:resource:instance").startswith("---")
 
     def test_unknown_document(self, index: Index):
         with pytest.raises(KeyError):
-            index.get_document("aws:r/does-not-exist")
-
-    def test_unknown_section_lists_available(self, index: Index):
-        with pytest.raises(KeyError, match="Argument Reference"):
-            index.get_document("aws:r/instance", section="No Such Section")
+            index.get_document("aws:resource:does-not-exist")
 
 
 class TestConcurrency:
@@ -202,7 +190,7 @@ class TestConcurrency:
         assert all(r for r in results)
 
     def test_parallel_document_reads(self, index: Index):
-        ids = ["aws:r/instance", "google:r/compute_instance", "aws:d/ami"] * 8
+        ids = ["aws:resource:instance", "google:resource:compute_instance", "aws:datasource:ami"] * 8
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
             texts = list(pool.map(index.get_document, ids))
         assert all(t for t in texts)
