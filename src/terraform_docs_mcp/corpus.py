@@ -249,7 +249,9 @@ def iter_documents(config: ProviderConfig) -> Iterator[Document]:
         if kind is None:
             raise ValueError(f"{path} has no known kind")
 
-        title = _strip_doc_suffix(path.name)
+        # hard assumption here that filenames are always the name of the resource
+        # suffixed with provider_
+        title = f"{config.provider.value}_{_strip_doc_suffix(path.name)}"
 
         raw = path.read_text(encoding="utf-8", errors="replace")
         body, frontmatter = strip_frontmatter(raw)

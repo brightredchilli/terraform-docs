@@ -5,9 +5,9 @@ exercises the same path an MCP client uses without depending on the client
 library agreeing with the server. Point it at exactly the command your client
 launches:
 
-    terraform-docs-probe                                  # this package's server
-    terraform-docs-probe -- /path/to/terraform-docs-mcp   # a specific binary
-    terraform-docs-probe --command "uv run terraform-docs-mcp"
+    python -m terraform_docs_mcp.probe                          # this package's server
+    python -m terraform_docs_mcp.probe -- /path/to/terraform-docs-mcp serve
+    python -m terraform_docs_mcp.probe --command "uvx --from=./dist/*.whl terraform-docs-mcp serve"
 
 It reports each protocol phase separately, because "boots and lists tools but
 calls fail" is a distinct failure from "never starts": tool discovery is
@@ -283,7 +283,7 @@ def _default_args(tool_name: str) -> dict[str, Any] | None:
     if "search" in tool_name:
         return {"query": "s3 bucket lifecycle", "limit": 2}
     if "get_document" in tool_name:
-        return {"doc_id": "aws:resource:s3_bucket"}
+        return {"doc_id": "aws:resource:aws_s3_bucket"}
     return None
 
 

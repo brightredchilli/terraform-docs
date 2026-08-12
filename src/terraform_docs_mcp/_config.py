@@ -22,8 +22,42 @@ DOC_GLOB = "*.markdown"
 DOC_SUFFIXES = (".html.markdown", ".markdown")
 
 
+# Names of the things `make index` produces inside `_data`. Declared here
+# rather than in `index` so that `manifest` can check for them without
+# importing `index`, which imports `manifest`.
+
+#: Name of the build manifest inside ``_data``. Written last by
+#: :mod:`terraform_docs_mcp.build_index`, so its presence also means the build
+#: ran to completion.
+MANIFEST_FILENAME = "manifest.json"
+
+INDEX_FILENAME = "index.sqlite3"
+VECTORS_FILENAME = "vectors.i8.npy"
+MODEL_DIRNAME = "model"
+DOCS_DIRNAME = "docs"
+
+#: Document-level trigram search (see db.py). A separate artifact from
+#: index.sqlite3 -- built alongside it, not wired into the hybrid pipeline.
+DOCUMENTS_INDEX_FILENAME = "documents.sqlite3"
+
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = PROJECT_ROOT / "src" / "terraform_docs_mcp" / "_data"
+
+#: Source tree hashed into the manifest fingerprint. Only meaningful in a
+#: checkout: an installed wheel has no ``src/``, which is why hashing is
+#: build-time only.
+SOURCE_DIR = PROJECT_ROOT / "src"
+
+
+class IndexUnavailable(RuntimeError):
+    """The packaged index is missing, incomplete, or built by a different model.
+
+    Lives here rather than in :mod:`terraform_docs_mcp.index` because
+    :mod:`terraform_docs_mcp.manifest` raises it too and cannot import
+    ``index`` -- ``index`` imports ``manifest``. ``index`` re-exports it, so
+    ``from .index import IndexUnavailable`` keeps working.
+    """
 
 
 def data_dir() -> Path:

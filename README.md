@@ -19,7 +19,7 @@ make install     # uv tool install .
 ## Register with an MCP client
 
 ```bash
-claude mcp add terraform-docs -- terraform-docs serve
+claude mcp add terraform-docs -- terraform-docs-mcp serve
 ```
 
 Or by configuration file:
@@ -27,7 +27,7 @@ Or by configuration file:
 ```json
 {
   "mcpServers": {
-    "terraform-docs": { "command": "terraform-docs", "args": ["serve"] }
+    "terraform-docs": { "command": "terraform-docs-mcp", "args": ["serve"] }
   }
 }
 ```
@@ -35,9 +35,6 @@ Or by configuration file:
 The server speaks stdio by default. `--transport http` serves Streamable HTTP
 in stateless mode instead, so requests can be spread across replicas without
 sticky sessions.
-
-`terraform-docs-mcp` remains as an alias for `terraform-docs serve`, with the
-same flags, so existing client configurations keep working.
 
 ## Tools
 
@@ -128,9 +125,27 @@ config at build time, so runtime code carries no model-specific knowledge.
 
 ## Rebuilding
 
-`make index` re-reads the submodules and regenerates everything. The index
-records the commit SHA of each provider repo (`terraform-docs stats`),
-so you can tell which upstream revision a given artifact was built from.
+`make index` regenerates everything, but only when something actually changed.
+Each build writes `_data/manifest.json` recording the commit SHA of every
+provider repo, the embedding model, a SHA-256 over `src/`, and when it ran —
+and the Makefile uses that file as its target.
+
+```bash
+make index                 # rebuild if an input changed, otherwise a no-op
+make index FORCE=1         # rebuild regardless (also: make reindex)
+terraform-docs-mcp stats   # what the installed index was built from
+python -m terraform_docs_mcp.build_index --check   # why it is stale, no build
+```
+
+Staleness is content-based rather than mtime-based, because mtimes get it wrong
+in both directions here: `git checkout` rewrites unchanged files, and
+`git submodule update` replaces thousands of documents without touching a
+single file Make can see. A submodule with uncommitted changes under
+`website/docs` always counts as stale — `git status` reports which files
+changed but not what they now contain, so freshness cannot be established.
+
+The manifest is written last, so its presence also means the build finished; an
+interrupted build leaves none and the next run starts over.
 
 ## Use as a library
 
@@ -185,17 +200,17 @@ Two smaller notes:
 
 ## Checking the stdio server
 
-`terraform-docs-probe` spawns the server and speaks raw JSON-RPC to it, so it
+The probe spawns the server and speaks raw JSON-RPC to it, so it
 exercises the same path an MCP client does. It separates the phases, because
 "boots and lists tools but calls fail" is a different problem from "never
 starts" — discovery is answered from static metadata, while the first call also
 loads the embedding model and reads the index.
 
 ```bash
-make probe                                                    # this package's server
-terraform-docs-probe -- /path/to/terraform-docs serve         # a specific binary
-terraform-docs-probe --command "uvx --from=./dist/*.whl terraform-docs serve"
-terraform-docs-probe --tool terraform_mcp_search --args '{"query":"vpc"}'
+make probe                                                          # this package's server
+uv run python -m terraform_docs_mcp.probe -- terraform-docs-mcp serve   # a specific binary
+make probe PROBE_ARGS='--command "uvx --from=./dist/*.whl terraform-docs-mcp serve"'
+make probe PROBE_ARGS='--tool terraform_mcp_search --args {"query":"vpc"}'
 ```
 
 It reports timings per phase, surfaces the server's stderr on failure, and
@@ -204,7 +219,7 @@ flags non-JSON output on stdout — which silently corrupts the stdio protocol.
 ## Debugging without an MCP client
 
 ```bash
-terraform-docs search "s3 bucket lifecycle expiration"
+terraform-docs-mcp search "s3 bucket lifecycle expiration"
 ```
 
 ## Licensing

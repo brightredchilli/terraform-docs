@@ -11,38 +11,36 @@ and writes into the package's ``_data`` directory, which is then shipped by
 
 from __future__ import annotations
 
-from itertools import islice
+import argparse
 import shutil
 import sqlite3
-import subprocess
 import time
-from pathlib import Path
 from typing import Sequence
 
-import numpy as np
+# Disabled alongside the vector-embed build below -- see build(). `_write_db`
+# is left defined but uncalled, so INDEX_FILENAME/SCHEMA (which it still
+# references) stay imported; VECTORS_FILENAME/quantize do not, since those are
+# only used by the disabled vector-writing block.
+# import numpy as np
 
-from ._config import DATA_DIR, PROJECT_ROOT
+from ._config import DATA_DIR, DOCUMENTS_INDEX_FILENAME, PROJECT_ROOT
+from .manifest import (
+    current_inputs as _current_inputs,
+    read as _read_manifest,
+    staleness as _staleness,
+    summary as _summary,
+    write as _write_manifest,
+)
 
-from .corpus import Document, chunk_document, iter_documents, PROVIDERS
-from .embed import MODEL_ID, SentenceTransformerEmbedder, download_model
-from .index import INDEX_FILENAME, SCHEMA, VECTORS_FILENAME, quantize
+from .corpus import Document, iter_documents, PROVIDERS  # chunk_document: see below
+from .db import Db
+
+# from .embed import SentenceTransformerEmbedder, download_model
+from .index import INDEX_FILENAME, SCHEMA  # VECTORS_FILENAME, quantize: disabled
 
 
 def _log(message: str) -> None:
     print(f"[build-index] {message}", flush=True)
-
-
-def _git_sha(repo: Path) -> str:
-    try:
-        out = subprocess.run(
-            ["git", "-C", str(repo), "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return out.stdout.strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return "unknown"
 
 
 def _copy_docs() -> None:
@@ -68,45 +66,92 @@ def _copy_docs() -> None:
             )
 
 
-def build() -> dict[str, int]:
+def build(force: bool = False) -> dict[str, object] | None:
+    """Regenerate ``_data`` if any input changed. ``None`` if nothing did.
+
+    Everything is rebuilt or nothing is: the database is unlinked and the docs
+    tree is replaced wholesale, so there is no partial state to reason about.
+    The one exception is the embedding model, which ``download_model`` skips
+    when its ``MODEL_REPO.txt`` marker already names the right repo -- weights
+    are content-identified by that marker, and re-pulling 48 MB because a
+    Python file changed would be pure waste.
+    """
+    reason = _staleness(DATA_DIR, PROVIDERS)
+    if reason is None and not force:
+        recorded = _read_manifest(DATA_DIR)
+        _log(f"up to date ({recorded.get('fingerprint', '')[:12]}); nothing to do")
+        for line in _summary(recorded):
+            _log(line)
+        return None
+    _log(f"rebuilding: {reason or 'forced'}")
+
+    # Captured before the build, not after: a source edit made during these ~96
+    # seconds did not go into this index, and recording it would mark a stale
+    # index fresh. Recording the older hash merely triggers one more rebuild.
+    inputs = _current_inputs(PROVIDERS)
+
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-    _log("fetching embedding model")
-    model_dir = download_model(DATA_DIR / "model")
+    # -- vector-embed build: disabled -------------------------------------
+    # Focus is on the document-level trigram search path (db.py) for now.
+    # Re-enable this block, the "writing sqlite index" block below it, and the
+    # commented imports above, together -- they are one unit.
+    #
+    # _log("fetching embedding model")
+    # model_dir = download_model(DATA_DIR / MODEL_DIRNAME)
 
-    _log("loading and chunking documents")
+    _log("loading documents")
     t0 = time.time()
-    documents, chunks = [], []
+    documents = []
     for provider in PROVIDERS.values():
         for doc in iter_documents(provider):
             documents.append(doc)
-            chunks.extend(chunk_document(doc))
-    _log(f"{len(documents)} documents, {len(chunks)} chunks ({time.time() - t0:.1f}s)")
+            # chunks.extend(chunk_document(doc))  # embedding-only; see above
+    _log(f"{len(documents)} documents ({time.time() - t0:.1f}s)")
 
-    _log("embedding")
-    t0 = time.time()
-    embedder = SentenceTransformerEmbedder(model_dir)
-    # encode() handles batching, length-sorting to minimise padding, and the
-    # progress bar itself; there is nothing to hand-roll here.
-    vectors = embedder.embed_documents([c.text for c in chunks], progress=True)
-    _log(
-        f"embedded {len(chunks)} chunks, dim {vectors.shape[1]} ({time.time() - t0:.1f}s)"
-    )
+    # _log("embedding")
+    # t0 = time.time()
+    # embedder = SentenceTransformerEmbedder(model_dir)
+    # # encode() handles batching, length-sorting to minimise padding, and the
+    # # progress bar itself; there is nothing to hand-roll here.
+    # vectors = embedder.embed_documents([c.text for c in chunks], progress=True)
+    # _log(
+    #     f"embedded {len(chunks)} chunks, dim {vectors.shape[1]} ({time.time() - t0:.1f}s)"
+    # )
+    #
+    # _log("writing vectors")
+    # quantized = quantize(vectors)
+    # np.save(DATA_DIR / VECTORS_FILENAME, quantized)
+    #
+    # _log("writing sqlite index")
+    # _write_db(documents, chunks)
+    # -- end vector-embed build --------------------------------------------
 
-    _log("writing vectors")
-    quantized = quantize(vectors)
-    np.save(DATA_DIR / VECTORS_FILENAME, quantized)
-
-    _log("writing sqlite index")
-    _write_db(documents, chunks, vectors.shape[1])
+    # The document-level trigram search path. A separate artifact from
+    # index.sqlite3 -- not wired into the (currently disabled) hybrid pipeline.
+    _log("writing document-level trigram index")
+    _write_documents_db(documents)
 
     _log("copying documentation and licenses")
     _copy_docs()
 
-    return {"documents": len(documents), "chunks": len(chunks)}
+    # Last, deliberately: the manifest's presence is what says the build
+    # finished. A crash above leaves none, and the next run starts over.
+    # `dim`/`chunk_count` are omitted while the vector-embed build is
+    # disabled -- there is no vectors array or chunk list to report on.
+    document = _write_manifest(
+        DATA_DIR,
+        inputs,
+        {
+            "built_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "document_count": len(documents),
+        },
+    )
+    _log(f"wrote manifest ({document['fingerprint'][:12]})")
+    return document
 
 
-def _write_db(documents: Sequence[Document], chunks, dim: int) -> None:
+def _write_db(documents: Sequence[Document], chunks) -> None:
     db_path = DATA_DIR / INDEX_FILENAME
     db_path.unlink(missing_ok=True)
 
@@ -144,22 +189,62 @@ def _write_db(documents: Sequence[Document], chunks, dim: int) -> None:
             [(i, c.text) for i, c in enumerate(chunks, start=1)],
         )
 
-        meta = {
-            "model_id": MODEL_ID,
-            "dim": str(dim),
-            "built_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "chunk_count": str(len(chunks)),
-            "document_count": str(len(documents)),
-        }
-        for config in PROVIDERS.values():
-            meta[f"{config.provider}_commit"] = _git_sha(
-                PROJECT_ROOT / config.source_docs_dir
-            )
-        conn.executemany(
-            "INSERT INTO meta (key, value) VALUES (?,?)", sorted(meta.items())
-        )
-
         conn.commit()
         conn.execute("VACUUM")
     finally:
         conn.close()
+
+
+def _write_documents_db(documents: Sequence[Document]) -> None:
+    db_path = DATA_DIR / DOCUMENTS_INDEX_FILENAME
+    db_path.unlink(missing_ok=True)
+    db = Db(db_path, readonly=False)
+    try:
+        db.create_schema()
+        db.add_documents(documents)
+        db.rebuild_fts()
+        db.commit()
+        db.vacuum()
+    finally:
+        db.close()
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="python -m terraform_docs_mcp.build_index",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--force",
+        action="store_true",
+        help="Rebuild even when nothing changed.",
+    )
+    group.add_argument(
+        "--check",
+        action="store_true",
+        help="Report whether a rebuild is needed and exit 1 if so; build nothing.",
+    )
+    args = parser.parse_args(argv)
+
+    if args.check:
+        reason = _staleness(DATA_DIR, PROVIDERS)
+        if reason is None:
+            _log("up to date")
+            return 0
+        _log(f"stale: {reason}")
+        return 1
+
+    try:
+        build(force=args.force)
+    except KeyboardInterrupt:
+        # The manifest is written last, so an interrupted build leaves none and
+        # the next run starts over. Nothing to clean up.
+        _log("interrupted")
+        return 130
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -3,6 +3,7 @@
 Exists so retrieval can be exercised and tuned without wiring up an MCP client.
 """
 
+import dataclasses
 import json
 from enum import StrEnum
 from pathlib import Path
@@ -11,12 +12,13 @@ from typing import Annotated
 
 import typer
 
-from terraform_docs_mcp._config import PROJECT_ROOT
+from terraform_docs_mcp._config import DOCUMENTS_INDEX_FILENAME, PROJECT_ROOT
+from terraform_docs_mcp._config import data_dir as _data_dir
 from terraform_docs_mcp.corpus import Kind, Provider
 from terraform_docs_mcp.util import all_values, handle_broken_pipe
 
+from .db import Db
 from .index import Index, IndexUnavailable
-from .build_index import build as _build_index
 from .server import Transport, serve as _serve
 
 app = typer.Typer(no_args_is_help=True)
@@ -38,6 +40,14 @@ def _get_index() -> Index:
     except IndexUnavailable as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise typer.Exit(2)
+
+
+def _get_documents_db() -> Db:
+    path = _data_dir() / DOCUMENTS_INDEX_FILENAME
+    if not path.exists():
+        print(f"error: no document index at {path}. Run `make index`.", file=sys.stderr)
+        raise typer.Exit(2)
+    return Db(path, readonly=True)
 
 
 @app.command()
@@ -73,17 +83,30 @@ def search(
     limit: Annotated[
         int, typer.Option(max=100, help="Limit search results. Default: 10")
     ] = 10,
+    db: Annotated[
+        bool,
+        typer.Option(
+            "--db",
+            help=(
+                "Text search only (trigram full-text over document headings "
+                "and bodies). Skips the embedding model entirely -- no torch "
+                "import, no hybrid fusion."
+            ),
+        ),
+    ] = False,
 ):
     """
     Search documents.
 
     """
+    if db:
+        database = _get_documents_db()
+        results = database.search(query, provider=provider, kind=kind, limit=limit)
+        print(json.dumps([dataclasses.asdict(r) for r in results], indent=2))
+        return
+
     index = _get_index()
-
-    query = " ".join(query).strip()
-
     results = index.search(query, provider=provider, kind=kind, limit=limit)
-
     print(json.dumps(results, indent=2))
 
 

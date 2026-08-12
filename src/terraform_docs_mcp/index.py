@@ -14,6 +14,15 @@ from typing import Any, Iterable
 
 import numpy as np
 
+from .manifest import read as _read_manifest
+from ._config import (
+    DOCS_DIRNAME,
+    INDEX_FILENAME,
+    MANIFEST_FILENAME,
+    MODEL_DIRNAME,
+    VECTORS_FILENAME,
+    IndexUnavailable,
+)
 from ._config import data_dir as _default_data_dir
 from .embed import MODEL_ID, SentenceTransformerEmbedder
 from .search import (
@@ -23,8 +32,7 @@ from .search import (
     to_fts_match,
 )
 
-INDEX_FILENAME = "index.sqlite3"
-VECTORS_FILENAME = "vectors.i8.npy"
+__all__ = ["Index", "IndexUnavailable", "INDEX_FILENAME", "VECTORS_FILENAME", "SCHEMA"]
 
 #: Chunks pulled from each retrieval channel before fusion. Generous relative
 #: to the default limit of 10 because fusion and document-level aggregation
@@ -44,12 +52,10 @@ _IDENTIFIER_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 #: sources share the same name and should follow rather than displace them.
 _KIND_PRIORITY = {"resource": 0, "datasource": 1}
 
+# Build provenance deliberately does not live here. It sits in `_data/manifest.json`
+# so the Makefile can use it as a target; a value inside this database is
+# invisible to the build system. See `manifest.py`.
 SCHEMA = """
-CREATE TABLE meta (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
-
 CREATE TABLE documents (
     doc_id      TEXT PRIMARY KEY,
     provider    TEXT NOT NULL,
@@ -82,10 +88,6 @@ CREATE VIRTUAL TABLE chunks_fts USING fts5(
 """
 
 
-class IndexUnavailable(RuntimeError):
-    """The packaged index is missing or was built by a different model."""
-
-
 def quantize(vectors: np.ndarray) -> np.ndarray:
     """Convert unit float32 vectors to int8."""
     return np.round(vectors * QUANT_SCALE).clip(-127, 127).astype(np.int8)
@@ -107,6 +109,7 @@ class Index:
         self._lock = threading.Lock()
         self._vectors: np.ndarray | None = None
         self._embedder: SentenceTransformerEmbedder | None = None
+        self._manifest: dict[str, Any] | None = None
 
         if not self._db_path.exists():
             raise IndexUnavailable(
@@ -119,6 +122,12 @@ class Index:
                 "  As a dependency:     depend on the built wheel, not on the "
                 "git repository."
             )
+
+        # Eager, unlike everything else here: the manifest is what proves this
+        # index matches the code about to query it, and `serve()` builds an
+        # Index at startup precisely so a broken install fails before a client
+        # ever connects rather than on its first search.
+        self._manifest = _read_manifest(self._dir)
 
     # ---------------------------------------------------------------- lazy
 
@@ -151,14 +160,20 @@ class Index:
         if self._embedder is None:
             with self._lock:
                 if self._embedder is None:
-                    self._embedder = SentenceTransformerEmbedder(self._dir / "model")
+                    self._embedder = SentenceTransformerEmbedder(
+                        self._dir / MODEL_DIRNAME
+                    )
         return self._embedder
 
     # ------------------------------------------------------------- metadata
 
-    def meta(self) -> dict[str, str]:
-        rows = self._conn().execute("SELECT key, value FROM meta").fetchall()
-        return {r["key"]: r["value"] for r in rows}
+    def manifest(self) -> dict[str, Any]:
+        """Build provenance: what produced this index, and when.
+
+        Read once in ``__init__``; see :mod:`terraform_docs_mcp.manifest`.
+        """
+        assert self._manifest is not None  # set in __init__ or construction failed
+        return self._manifest
 
     def _check_compatible(self) -> None:
         """Refuse to search an index built by a different model.
@@ -167,13 +182,15 @@ class Index:
         this stays cheap: it must not force a multi-hundred-megabyte torch
         model to load just to reject a stale index.
         """
-        meta = self.meta()
-        if meta.get("model_id") != MODEL_ID:
+        inputs = self.manifest().get("inputs") or {}
+        outputs = self.manifest().get("outputs") or {}
+        if inputs.get("model_id") != MODEL_ID:
             raise IndexUnavailable(
-                f"Index was built with {meta.get('model_id')} (dim {meta.get('dim')}) "
-                f"but this build embeds with {MODEL_ID}. Rebuild with `make index`."
+                f"Index was built with {inputs.get('model_id')} "
+                f"(dim {outputs.get('dim')}) but this build embeds with "
+                f"{MODEL_ID}. Rebuild with `make index`."
             )
-        recorded = int(meta.get("dim", 0))
+        recorded = int(outputs.get("dim", 0))
         if self.vectors.shape[1] != recorded:
             raise IndexUnavailable(
                 f"Vector array has {self.vectors.shape[1]} dimensions but the index "
@@ -399,16 +416,29 @@ class Index:
         if row is None:
             raise KeyError(f"Unknown doc_id: {doc_id!r}")
 
-        path = self._dir / "docs" / row["provider"] / row["rel_path"]
+        path = self._dir / DOCS_DIRNAME / row["provider"] / row["rel_path"]
         text = path.read_text(encoding="utf-8", errors="replace")
         body = _strip_frontmatter(text)
         return body
 
     def stats(self) -> dict[str, Any]:
+        """Live row counts alongside the manifest that describes the build.
+
+        The counts are recounted rather than read from the manifest, so the two
+        disagreeing is itself informative: it means the database was replaced
+        without rebuilding.
+        """
         conn = self._conn()
         docs = conn.execute("SELECT COUNT(*) AS n FROM documents").fetchone()["n"]
         chunks = conn.execute("SELECT COUNT(*) AS n FROM chunks").fetchone()["n"]
-        return {"documents": docs, "chunks": chunks, **self.meta()}
+        document = self.manifest()
+        return {
+            "documents": docs,
+            "chunks": chunks,
+            "fingerprint": document.get("fingerprint"),
+            **(document.get("inputs") or {}),
+            **(document.get("outputs") or {}),
+        }
 
 
 def _strip_frontmatter(text: str) -> str:

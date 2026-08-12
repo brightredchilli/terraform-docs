@@ -34,6 +34,33 @@ distributions, it also strips paths from the *wheel*, which silently produces a
 34 KB package containing no index. uv_build includes non-`.py` files under the
 module directory automatically, gitignore notwithstanding.
 
+For the same reason, **`_data/` must stay inside the module directory.** Moving
+it to the repo root — tempting, since it would drop one entry from the source
+checksum's exclusion list — puts it outside what uv_build ships and reproduces
+that same empty-wheel failure by construction. Getting it back in would need
+`data = { purelib = … }` with a staging tree mirroring site-packages, plus a
+source-tree fallback in `data_dir()`.
+
+**`_data/manifest.json` is the build's completion marker, and is written last.**
+A build that dies partway leaves no manifest, so the next `make index` starts
+over. Nothing may write it earlier "to be safe".
+
+**The fingerprint covers inputs only.** `built_at`, `dim` and the counts are
+outputs and live under a separate key. Feeding an output into the fingerprint
+makes every build stale the instant it finishes — `built_at` differs between
+any two builds, so no index could ever match its own inputs. There is a test
+for this.
+
+**Source hashing is build-time only.** `manifest.source_sha256()` walks `src/`,
+which does not exist in an installed wheel — there, `PROJECT_ROOT` points at
+whatever sits above `site-packages`. Runtime code calls `manifest.read()` and
+nothing else. Keep `current_inputs`/`staleness` out of the query path.
+
+**A dirty submodule is always stale.** `git status` says which files changed,
+not what they now contain, so an index built from a dirty tree can never be
+matched against it later. `staleness()` therefore rebuilds every time until the
+submodule is clean, which is the safe direction.
+
 **Never depend on this project from git.** A git checkout has no `_data`, so the
 build succeeds and produces a package that raises `IndexUnavailable` on first
 use. Distribute `dist/*.whl` built after `make index`.
@@ -81,24 +108,37 @@ enough that tuning parameters against it fits noise. Prefer structural fixes.
 | | |
 |---|---|
 | `make bootstrap` | fetch submodules, sparse-checkout `website/docs` only |
-| `make index` | build the index into `_data/` (~96 s on Apple silicon) |
+| `make index` | rebuild `_data/` if an input changed (~96 s), else a <1 s no-op |
+| `make index FORCE=1` | rebuild unconditionally (also `make reindex`) |
 | `make check` | typecheck + tests |
-| `make build` | wheel (runs `index` first — `uv_build` has no build hooks) |
-| `make install` | `uv tool install` locally |
+| `make build` | wheel (re-indexes first — `uv_build` has no build hooks) |
+| `make install` | `uv tool install` the built wheel; always reinstalls |
 | `make probe` | exercise the stdio MCP server end to end |
+
+Staleness is decided by `_data/manifest.json`, not by mtimes: `git checkout`
+rewrites unchanged files, and `git submodule update` swaps thousands of
+documents without touching a tracked file. `python -m
+terraform_docs_mcp.build_index --check` reports the reason without building.
+It is `FORCE=1` and not `--force` because make parses a leading `--` as its own
+option.
 
 ## Layout
 
 ```
 src/terraform_docs_mcp/
-  _config.py     constants and packaged-data path (no intra-package imports)
+  _config.py     constants, paths, IndexUnavailable (no intra-package imports)
   corpus.py      load + chunk markdown          (build-time only)
   embed.py       sentence-transformers wrapper
+  manifest.py    build provenance + staleness; read() is the only runtime part
   index.py       sqlite + vectors, hybrid search
   search.py      query prep, RRF fusion, aggregation (pure functions)
   server.py      MCP tools + serve(); no argument parsing
-  cli.py         typer app: search/get/stats/build/serve — all entry points
+  cli.py         typer app: search/get/stats/serve — the installed entry points
   probe.py       stdio MCP diagnostic
-  build_index.py index builder                  (build-time only)
+  build_index.py index builder + `-m` entry point  (build-time only)
   _data/         GENERATED — never committed, always shipped
 ```
+
+Building is deliberately *not* a `cli.py` command: `_data/` is baked into the
+wheel, so an installed user has nothing to rebuild. `python -m
+terraform_docs_mcp.build_index` is the only build entry point.

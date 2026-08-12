@@ -39,7 +39,7 @@ class Transport(StrEnum):
 
 
 mcp = MCPServer(
-    name="terraform-docs",
+    name="terraform-docs-mcp",
     version=__version__,
     instructions=INSTRUCTIONS,
 )
@@ -80,10 +80,12 @@ def terraform_mcp_search(
     kind: Annotated[
         str | None,
         Field(
-            description=f"Restrict to a document kind. Optional. Values: {all_values(Kind)}"
+            description=f"Restrict to a document kind. Only use this param if the kind is known in advance. Values: {all_values(Kind)}"
         ),
     ] = None,
-    limit: Annotated[int, Field(description="Maximum documents to return.")] = 10,
+    limit: Annotated[
+        int, Field(description="Maximum documents to return.", gt=14, lt=100)
+    ] = 15,
 ) -> list[dict[str, Any]]:
     """Search Terraform provider documentation and return matching documents.
 
@@ -92,6 +94,8 @@ def terraform_mcp_search(
     old objects in a bucket automatically") work.
 
     Each result carries a `doc_id` to pass to `get_document`.
+
+    When starting searches, DO NOT provide a kind, and leave the limit field at its default. Only increase it if necessary, don't decrease it.
     """
     limit = max(1, min(int(limit), MAX_LIMIT))
     return get_index().search(query, provider=provider, kind=kind, limit=limit)

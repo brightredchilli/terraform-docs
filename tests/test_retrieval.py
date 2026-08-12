@@ -201,7 +201,14 @@ class TestIndexMetadata:
         stats = index.stats()
         assert stats["documents"] > 4000
         assert stats["chunks"] > 10000
-        assert stats["aws_commit"] != "unknown"
+        assert stats["providers"]["aws"]["commit"] != "unknown"
+        assert stats["fingerprint"]
+
+    def test_live_counts_match_recorded_counts(self, index: Index):
+        """A disagreement means the database was replaced without rebuilding."""
+        stats = index.stats()
+        assert stats["documents"] == stats["document_count"]
+        assert stats["chunks"] == stats["chunk_count"]
 
     def test_vectors_align_with_chunks(self, index: Index):
         """vectors row i must correspond to chunk id i+1."""
@@ -212,4 +219,11 @@ class TestIndexMetadata:
     def test_model_identity_recorded(self, index: Index):
         from terraform_docs_mcp.embed import MODEL_ID
 
-        assert index.meta()["model_id"] == MODEL_ID
+        assert index.manifest()["inputs"]["model_id"] == MODEL_ID
+
+    def test_provenance_is_not_in_the_database(self, index: Index):
+        """It lives in manifest.json so the Makefile can use it as a target."""
+        tables = index._conn().execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+        assert "meta" not in {row["name"] for row in tables}
