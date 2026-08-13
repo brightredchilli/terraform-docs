@@ -22,6 +22,11 @@ from ._config import DOC_GLOB, DOC_SUFFIXES, PROJECT_ROOT
 # should retrieve that block, not the whole page.
 HEADERS_TO_SPLIT_ON = [("#", "h1"), ("##", "h2"), ("###", "h3")]
 
+#: Just h1/h2, for extract_intro -- h3 doesn't matter there, and passing the
+#: full HEADERS_TO_SPLIT_ON would split the intro apart if it happened to
+#: contain a "###" (rare, but the point is to grab one contiguous span).
+_INTRO_HEADERS = [("#", "h1"), ("##", "h2")]
+
 # Character budgets. The embedding model truncates at 512 tokens; ~1600 chars
 # keeps us comfortably inside that for English prose mixed with HCL.
 MAX_CHUNK_CHARS = 1600
@@ -341,6 +346,32 @@ def chunk_document(doc: Document) -> list[Chunk]:
                 )
             )
     return chunks
+
+
+def extract_intro(body: str) -> str:
+    """Everything in ``body`` before its first ``##`` (h2).
+
+    For most pages this is the h1 plus a paragraph or two of prose before the
+    first real section (``Example Usage``, ``Argument Reference``, ...) --
+    the closest thing these pages have to a lead paragraph.
+
+    Uses ``MarkdownHeaderTextSplitter`` rather than a ``^## `` line scan
+    because it is fence-aware: a naive scan would misfire on HCL example code
+    containing a doubled ``##`` comment, which is exactly the class of bug
+    ``chunk_document`` already had to avoid for the same reason. A page with
+    no ``##`` at all (a short guide, say) returns the whole body.
+    """
+    from langchain_text_splitters import MarkdownHeaderTextSplitter  # build-time dependency
+
+    splitter = MarkdownHeaderTextSplitter(
+        headers_to_split_on=_INTRO_HEADERS, strip_headers=False
+    )
+    sections = splitter.split_text(body)
+    intro = sections[0].page_content if sections else body
+    # The splitter joins lines with markdown hard-breaks ("  \n"); undo that,
+    # same reason _make_snippet does -- it is a splitter artifact, not
+    # something worth preserving in cached output.
+    return re.sub(r" {2}\n", "\n", intro).strip()
 
 
 def _summary_chunk(doc: Document) -> Chunk:

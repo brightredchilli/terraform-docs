@@ -68,6 +68,11 @@ def populated(db: Db) -> Db:
                 title="aws_instance",
                 body="Look up an existing EC2 instance.",
             ),
+            _doc(
+                "aws:resource:aws_s3_bucket_lifecycle_configuration",
+                title="aws_s3_bucket_lifecycle_configuration",
+                body="Manages an S3 bucket's lifecycle configuration.",
+            ),
         ]
     )
     db.rebuild_fts()
@@ -93,18 +98,22 @@ class TestDocuments:
             kind=Kind.resource,
             body="Provides an EC2 instance.",
             heading="aws_instance aws instance",
+            checksum=found.checksum,  # sha256(body), not worth duplicating here
+            rel_path="r/instance.html.markdown",
         )
 
-    def test_title_subcategory_description_rel_path_are_not_persisted(self, db: Db):
+    def test_title_subcategory_description_are_not_persisted(self, db: Db):
         """StoredDocument is narrower than Document by design -- title is
         redundant with doc_id's trailing segment, and subcategory/description
-        are build-time-only inputs to the embedded chunk text."""
+        are build-time-only inputs to the embedded chunk text. rel_path *is*
+        persisted (unlike the others) -- summarize.py needs it to reconstruct
+        each document's original website/docs layout."""
         db.add_documents([_doc("aws:resource:aws_instance")])
         (found,) = db.get_documents(["aws:resource:aws_instance"])
         assert not hasattr(found, "title")
         assert not hasattr(found, "subcategory")
         assert not hasattr(found, "description")
-        assert not hasattr(found, "rel_path")
+        assert found.rel_path == "r/instance.html.markdown"
 
     def test_returned_in_the_order_asked_for(self, populated: Db):
         ids = ["google:resource:google_compute_instance", "aws:resource:aws_instance"]
@@ -158,14 +167,19 @@ class TestGetDocumentsByIdentifier:
 
 
 class TestSearch:
-    def test_finds_by_body_text(self, populated: Db):
-        found = populated.search("lifecycle expiration")
-        assert [d.doc_id for d in found] == ["aws:resource:aws_s3_bucket"]
+    def test_body_text_is_not_searched(self, populated: Db):
+        """heading is indexed, body is not -- see the comment on documents_fts
+        in SCHEMA. A term appearing only in a page's body must not match,
+        however distinctive: it was body text alone that used to bury exact
+        identifier matches under longer, unrelated superstrings."""
+        assert populated.search("expiration policies") == []
 
     def test_substring_match(self, populated: Db):
         """Trigram matches inside a longer token, not just whole words."""
         found = populated.search("lifecyc")
-        assert "aws:resource:aws_s3_bucket" in [d.doc_id for d in found]
+        assert "aws:resource:aws_s3_bucket_lifecycle_configuration" in [
+            d.doc_id for d in found
+        ]
 
     def test_de_underscored_heading_match(self, populated: Db):
         """A query omitting underscores still finds the identifier that uses
@@ -178,10 +192,10 @@ class TestSearch:
         or its de-underscored form 'aws s3 bucket' -- trigram must not match it."""
         assert populated.search("s3bucket") == []
 
-    def test_heading_match_outranks_body_only_match(self, db: Db):
-        """A term appearing in the identifier is a stronger signal than the
-        same term merely appearing somewhere in a page's body -- heading is
-        weighted 2x body, not searched with equal weight."""
+    def test_exact_identifier_is_not_buried_by_body_matches(self, db: Db):
+        """This is the concrete failure that motivated excluding body: a page
+        merely *mentioning* a term in its body must not compete with -- let
+        alone outrank -- a page whose identifier *is* that term."""
         db.add_documents(
             [
                 _doc(
@@ -199,10 +213,7 @@ class TestSearch:
         db.rebuild_fts()
         db.commit()
         found = db.search("gateway")
-        assert [d.doc_id for d in found] == [
-            "aws:resource:aws_gateway",
-            "aws:resource:aws_widget",
-        ]
+        assert [d.doc_id for d in found] == ["aws:resource:aws_gateway"]
 
     def test_each_document_appears_once(self, populated: Db):
         found = populated.search("instance")
@@ -221,8 +232,10 @@ class TestSearch:
         assert len(populated.search("instance", limit=1)) == 1
 
     def test_returns_whole_documents(self, populated: Db):
+        """Matched via heading; body is still returned in full even though it
+        played no part in finding the document."""
         (found,) = populated.search("lifecycle")
-        assert found.body.startswith("Provides an S3 bucket")
+        assert found.body.startswith("Manages an S3 bucket's lifecycle")
 
     @pytest.mark.parametrize(
         "query",
@@ -267,11 +280,11 @@ class TestLifecycle:
         assert reader.counts() == populated.counts()
 
     def test_counts(self, populated: Db):
-        assert populated.counts().documents == 4
+        assert populated.counts().documents == 5
 
     def test_vacuum(self, populated: Db):
         populated.vacuum()
-        assert populated.counts().documents == 4
+        assert populated.counts().documents == 5
 
     def test_close_is_idempotent(self, populated: Db):
         populated.close()
@@ -279,7 +292,7 @@ class TestLifecycle:
 
     def test_reopens_after_close(self, populated: Db):
         populated.close()
-        assert populated.counts().documents == 4
+        assert populated.counts().documents == 5
 
     def test_creates_parent_directories(self, tmp_path: Path):
         nested = Db(tmp_path / "a" / "b" / "documents.sqlite3", readonly=False)

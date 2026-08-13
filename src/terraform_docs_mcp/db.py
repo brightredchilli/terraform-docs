@@ -23,11 +23,12 @@ objects back.
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Iterable, Iterator, Sequence
 
 from .corpus import Document, Kind, Provider
 from .search import to_fts_match
@@ -36,18 +37,10 @@ from .search import to_fts_match
 #: Generous, because it may feed rank fusion rather than a user directly.
 CANDIDATES = 60
 
-# bm25() column weights, positional in the order documents_fts declares its
-# columns (heading, body) -- see SCHEMA below. A match on heading (the
-# identifier, e.g. "aws_s3_bucket aws s3 bucket") is a stronger signal than
-# the same term appearing somewhere in a page's full body text, so it counts
-# for twice as much.
-_HEADING_WEIGHT = 2.0
-_BODY_WEIGHT = 1.0
-
 # Columns of `documents`, in insert order. Named explicitly and used to build
 # both the INSERT and every SELECT, so that adding a column cannot leave a
 # `SELECT *` silently handing back rows with fields nobody reads.
-_DOCUMENT_COLUMNS = ("doc_id", "provider", "kind", "body", "heading")
+_DOCUMENT_COLUMNS = ("doc_id", "provider", "kind", "body", "heading", "checksum", "rel_path")
 
 SCHEMA = """
 CREATE TABLE documents (
@@ -60,7 +53,17 @@ CREATE TABLE documents (
     -- still finds an identifier that uses them. Not a GENERATED column:
     -- title itself is not stored (it is redundant with doc_id's trailing
     -- segment), so this is computed once in Python at write time instead.
-    heading  TEXT NOT NULL
+    heading  TEXT NOT NULL,
+    -- sha256(body), hex. Lets summarize.py detect exactly which documents'
+    -- content actually changed, independent of whether the provider commit
+    -- as a whole moved.
+    checksum TEXT NOT NULL,
+    -- Re-added after StoredDocument originally dropped it: summarize.py needs
+    -- it to reconstruct the original website/docs/<kind-dir>/<stem> layout
+    -- under src/summaries/, which doc_id/kind alone cannot do (the kind
+    -- enum's value, e.g. "datasource", is not the same string as the source
+    -- directory name, "d").
+    rel_path TEXT NOT NULL
 );
 CREATE INDEX idx_documents_provider ON documents(provider);
 CREATE INDEX idx_documents_kind     ON documents(kind);
@@ -69,10 +72,18 @@ CREATE INDEX idx_documents_kind     ON documents(kind);
 -- indexes every substring rather than whole words, so "s3bucket" or
 -- "lifecyc" match inside a longer identifier, while a query like "s3bucket"
 -- still does not spuriously match "aws s3 bucket" prose (there is no such
--- literal substring). content='documents' means FTS5 reads heading/body
--- straight from the table rather than storing a second copy.
+-- literal substring). content='documents' means FTS5 reads heading straight
+-- from the table rather than storing a second copy.
+--
+-- heading only, not body: indexing full page bodies let a page merely
+-- *mentioning* a term outrank -- or bury -- a page whose identifier *is* that
+-- term (e.g. a query for "aws_s3_bucket" failed to surface
+-- aws:resource:aws_s3_bucket at all in the top 8, beaten by every longer
+-- name containing it as a prefix, such as aws_s3_bucket_versioning). Search
+-- is scoped to the identifier signal; body remains in `documents` for
+-- display and is read directly by get_document, just not indexed.
 CREATE VIRTUAL TABLE documents_fts USING fts5(
-    heading, body,
+    heading,
     content='documents',
     content_rowid='rowid',
     tokenize='trigram'
@@ -105,6 +116,8 @@ class StoredDocument:
     kind: Kind
     body: str
     heading: str
+    checksum: str
+    rel_path: str
 
 
 def _heading(title: str) -> str:
@@ -114,6 +127,13 @@ def _heading(title: str) -> str:
     identifier that uses them ("aws_s3_bucket") via the trigram index.
     """
     return f"{title} {title.replace('_', ' ')}"
+
+
+def _checksum(body: str) -> str:
+    """sha256(body), hex. Used by summarize.py to detect exactly which
+    documents' content changed, independent of whether the provider commit as
+    a whole moved."""
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
 class Db:
@@ -184,9 +204,10 @@ class Db:
         """Store documents.
 
         Accepts the richer ``corpus.Document`` -- that is what callers have on
-        hand -- and persists only ``doc_id, provider, kind, body`` plus a
-        ``heading`` computed from ``title``. Everything else on ``Document`` is
-        read and discarded; see :class:`StoredDocument`.
+        hand -- and persists ``doc_id, provider, kind, body, rel_path`` plus a
+        ``heading`` computed from ``title`` and a ``checksum`` computed from
+        ``body``. ``title``/``subcategory``/``description`` are read and
+        discarded; see :class:`StoredDocument`.
         """
         self._require_writable()
         placeholders = ",".join("?" * len(_DOCUMENT_COLUMNS))
@@ -194,7 +215,15 @@ class Db:
             f"INSERT INTO documents ({','.join(_DOCUMENT_COLUMNS)})"
             f" VALUES ({placeholders})",
             [
-                (d.doc_id, d.provider.value, d.kind.value, d.body, _heading(d.title))
+                (
+                    d.doc_id,
+                    d.provider.value,
+                    d.kind.value,
+                    d.body,
+                    _heading(d.title),
+                    _checksum(d.body),
+                    d.rel_path,
+                )
                 for d in documents
             ],
         )
@@ -269,9 +298,10 @@ class Db:
     ) -> list[StoredDocument]:
         """Documents matching ``query``, best first.
 
-        Trigram full-text search over ``heading``/``body``. One row per
-        document -- ``documents_fts`` is 1:1 with ``documents`` -- so this is a
-        plain join and order-by, with no chunk-to-document rollup needed.
+        Trigram full-text search over ``heading`` alone -- not ``body``; see
+        the comment on ``documents_fts`` in ``SCHEMA``. One row per document
+        -- ``documents_fts`` is 1:1 with ``documents`` -- so this is a plain
+        join and order-by, with no chunk-to-document rollup needed.
         """
         match = to_fts_match(query)
         if not match:
@@ -286,12 +316,8 @@ class Db:
         if where:
             sql += f" AND {where}"
         # bm25() is negative and more negative is better, hence ascending.
-        # Weighted so a heading match outranks the same term merely appearing
-        # somewhere in the body -- see _HEADING_WEIGHT/_BODY_WEIGHT.
-        sql += " ORDER BY bm25(documents_fts, ?, ?) LIMIT ?"
-        rows = self._conn().execute(
-            sql, [match, *params, _HEADING_WEIGHT, _BODY_WEIGHT, limit]
-        )
+        sql += " ORDER BY bm25(documents_fts) LIMIT ?"
+        rows = self._conn().execute(sql, [match, *params, limit])
         return [_document(row) for row in rows]
 
     def counts(self) -> Counts:
@@ -302,6 +328,18 @@ class Db:
             ],
         )
 
+    def iter_all(self) -> Iterator[StoredDocument]:
+        """Every stored document, ordered by doc_id for determinism.
+
+        Feeds summarize.py's per-document checksum comparison -- it needs
+        every document's checksum, not a filtered or ranked subset.
+        """
+        rows = self._conn().execute(
+            f"SELECT {','.join(_DOCUMENT_COLUMNS)} FROM documents ORDER BY doc_id"
+        )
+        for row in rows:
+            yield _document(row)
+
 
 def _document(row: sqlite3.Row) -> StoredDocument:
     return StoredDocument(
@@ -310,6 +348,8 @@ def _document(row: sqlite3.Row) -> StoredDocument:
         kind=Kind(row["kind"]),
         body=row["body"],
         heading=row["heading"],
+        checksum=row["checksum"],
+        rel_path=row["rel_path"],
     )
 
 

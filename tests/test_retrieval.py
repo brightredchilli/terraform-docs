@@ -216,11 +216,6 @@ class TestIndexMetadata:
         assert index.vectors.shape[0] == n_chunks
         assert index.vectors.shape[1] == index.embedder.dim
 
-    def test_model_identity_recorded(self, index: Index):
-        from terraform_docs_mcp.embed import MODEL_ID
-
-        assert index.manifest()["inputs"]["model_id"] == MODEL_ID
-
     def test_provenance_is_not_in_the_database(self, index: Index):
         """It lives in manifest.json so the Makefile can use it as a target."""
         tables = index._conn().execute(

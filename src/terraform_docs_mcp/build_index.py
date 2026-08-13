@@ -1,9 +1,26 @@
-"""Build the packaged search index.
+"""Build the packaged search index and per-document summaries.
 
-Run via ``make index``. Not part of the installed tool: it imports the
-``build`` dependency group (langchain-text-splitters, huggingface-hub, pyyaml)
-and writes into the package's ``_data`` directory, which is then shipped by
-``uv_build``.
+Bare invocation builds everything, skipping whatever stage's inputs haven't
+changed:
+
+    uv run src/terraform_docs_mcp/build_index.py
+
+Or run one stage explicitly:
+
+    uv run src/terraform_docs_mcp/build_index.py index
+    uv run src/terraform_docs_mcp/build_index.py summaries
+
+Not part of the installed tool: it imports the ``build`` dependency group
+(langchain-text-splitters, huggingface-hub, pyyaml) and writes into the
+package's ``_data``/``src/summaries`` directories, which are then shipped (or,
+for summaries, read) by later steps.
+
+Imports are absolute (``terraform_docs_mcp.x``), not relative (``.x``),
+specifically so this file can be run directly by path as well as via
+``-m`` -- a relative import has no meaning when a file is executed as
+``__main__`` rather than imported as a submodule, and running it directly
+would fail with "attempted relative import with no known parent package"
+otherwise. This is the one module in the package where that matters.
 
 ``uv_build`` runs no build hooks, so this cannot be triggered from inside
 ``uv build``. The Makefile enforces the ordering instead.
@@ -11,36 +28,46 @@ and writes into the package's ``_data`` directory, which is then shipped by
 
 from __future__ import annotations
 
-import argparse
 import shutil
 import sqlite3
 import time
-from typing import Sequence
+from typing import Annotated, Sequence
 
-# Disabled alongside the vector-embed build below -- see build(). `_write_db`
+import typer
+
+# Disabled alongside the vector-embed build below -- see _run_index(). `_write_db`
 # is left defined but uncalled, so INDEX_FILENAME/SCHEMA (which it still
 # references) stay imported; VECTORS_FILENAME/quantize do not, since those are
 # only used by the disabled vector-writing block.
 # import numpy as np
 
-from ._config import DATA_DIR, DOCUMENTS_INDEX_FILENAME, PROJECT_ROOT
-from .manifest import (
-    current_inputs as _current_inputs,
-    read as _read_manifest,
-    staleness as _staleness,
-    summary as _summary,
-    write as _write_manifest,
-)
+from terraform_docs_mcp._config import DATA_DIR, DOCUMENTS_INDEX_FILENAME, PROJECT_ROOT
+from terraform_docs_mcp.manifest import Manifest, git_sha, repo_of
 
-from .corpus import Document, iter_documents, PROVIDERS  # chunk_document: see below
-from .db import Db
+from terraform_docs_mcp.corpus import (
+    Document,
+    iter_documents,
+    PROVIDERS,
+)  # chunk_document: see below
+from terraform_docs_mcp.db import Db
+from terraform_docs_mcp.summarize import ensure_summaries
+from terraform_docs_mcp.util import handle_broken_pipe
 
-# from .embed import SentenceTransformerEmbedder, download_model
-from .index import INDEX_FILENAME, SCHEMA  # VECTORS_FILENAME, quantize: disabled
+# from terraform_docs_mcp.embed import SentenceTransformerEmbedder, download_model
+from terraform_docs_mcp.index import (
+    INDEX_FILENAME,
+    SCHEMA,
+)  # VECTORS_FILENAME, quantize: disabled
+
+app = typer.Typer()
 
 
 def _log(message: str) -> None:
     print(f"[build-index] {message}", flush=True)
+
+
+def _current_commits() -> dict[str, str]:
+    return {name: git_sha(repo_of(config)) for name, config in PROVIDERS.items()}
 
 
 def _copy_docs() -> None:
@@ -66,39 +93,26 @@ def _copy_docs() -> None:
             )
 
 
-def build(force: bool = False) -> dict[str, object] | None:
-    """Regenerate ``_data`` if any input changed. ``None`` if nothing did.
+def _index_stale(commits: dict[str, str]) -> bool:
+    recorded = Manifest.read(DATA_DIR)
+    return (
+        recorded.documents_aws_commit_sha != commits["aws"]
+        or recorded.documents_google_commit_sha != commits["google"]
+        or not (DATA_DIR / DOCUMENTS_INDEX_FILENAME).exists()
+    )
 
-    Everything is rebuilt or nothing is: the database is unlinked and the docs
-    tree is replaced wholesale, so there is no partial state to reason about.
-    The one exception is the embedding model, which ``download_model`` skips
-    when its ``MODEL_REPO.txt`` marker already names the right repo -- weights
-    are content-identified by that marker, and re-pulling 48 MB because a
-    Python file changed would be pure waste.
+
+def _run_index(force: bool = False) -> None:
+    """Rebuild ``documents.sqlite3`` if either provider commit moved.
+
+    Wholesale, not incremental: the database is unlinked and every document
+    reloaded and reinserted, so there is no partial state to reason about.
     """
-    reason = _staleness(DATA_DIR, PROVIDERS)
-    if reason is None and not force:
-        recorded = _read_manifest(DATA_DIR)
-        _log(f"up to date ({recorded.get('fingerprint', '')[:12]}); nothing to do")
-        for line in _summary(recorded):
-            _log(line)
-        return None
-    _log(f"rebuilding: {reason or 'forced'}")
-
-    # Captured before the build, not after: a source edit made during these ~96
-    # seconds did not go into this index, and recording it would mark a stale
-    # index fresh. Recording the older hash merely triggers one more rebuild.
-    inputs = _current_inputs(PROVIDERS)
-
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-    # -- vector-embed build: disabled -------------------------------------
-    # Focus is on the document-level trigram search path (db.py) for now.
-    # Re-enable this block, the "writing sqlite index" block below it, and the
-    # commented imports above, together -- they are one unit.
-    #
-    # _log("fetching embedding model")
-    # model_dir = download_model(DATA_DIR / MODEL_DIRNAME)
+    commits = _current_commits()
+    if not force and not _index_stale(commits):
+        _log("documents up to date")
+        return
+    _log("rebuilding documents.sqlite3")
 
     _log("loading documents")
     t0 = time.time()
@@ -106,49 +120,42 @@ def build(force: bool = False) -> dict[str, object] | None:
     for provider in PROVIDERS.values():
         for doc in iter_documents(provider):
             documents.append(doc)
-            # chunks.extend(chunk_document(doc))  # embedding-only; see above
     _log(f"{len(documents)} documents ({time.time() - t0:.1f}s)")
 
-    # _log("embedding")
-    # t0 = time.time()
-    # embedder = SentenceTransformerEmbedder(model_dir)
-    # # encode() handles batching, length-sorting to minimise padding, and the
-    # # progress bar itself; there is nothing to hand-roll here.
-    # vectors = embedder.embed_documents([c.text for c in chunks], progress=True)
-    # _log(
-    #     f"embedded {len(chunks)} chunks, dim {vectors.shape[1]} ({time.time() - t0:.1f}s)"
-    # )
-    #
-    # _log("writing vectors")
-    # quantized = quantize(vectors)
-    # np.save(DATA_DIR / VECTORS_FILENAME, quantized)
-    #
-    # _log("writing sqlite index")
-    # _write_db(documents, chunks)
-    # -- end vector-embed build --------------------------------------------
-
-    # The document-level trigram search path. A separate artifact from
-    # index.sqlite3 -- not wired into the (currently disabled) hybrid pipeline.
     _log("writing document-level trigram index")
     _write_documents_db(documents)
 
     _log("copying documentation and licenses")
     _copy_docs()
 
-    # Last, deliberately: the manifest's presence is what says the build
-    # finished. A crash above leaves none, and the next run starts over.
-    # `dim`/`chunk_count` are omitted while the vector-embed build is
-    # disabled -- there is no vectors array or chunk list to report on.
-    document = _write_manifest(
-        DATA_DIR,
-        inputs,
-        {
-            "built_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "document_count": len(documents),
-        },
+    Manifest.update(
+        DATA_DIR, documents_aws=commits["aws"], documents_google=commits["google"]
     )
-    _log(f"wrote manifest ({document['fingerprint'][:12]})")
-    return document
+    _log("wrote manifest (documents_aws, documents_google)")
+
+
+def _run_summaries(force: bool = False) -> None:
+    """Refresh ``src/summaries/`` for any document whose checksum changed.
+
+    Reads from ``documents.sqlite3`` (via ``Db.iter_all``), so it always runs
+    against whatever the last ``_run_index`` actually produced -- run ``index``
+    first if the database itself is stale.
+    """
+    db = Db(DATA_DIR / DOCUMENTS_INDEX_FILENAME, readonly=True)
+    try:
+        counts = ensure_summaries(db, force=force)
+    finally:
+        db.close()
+    _log(
+        f"summaries: {counts['written']} written, {counts['regenerated']} regenerated, "
+        f"{counts['skipped']} skipped"
+    )
+
+    commits = _current_commits()
+    Manifest.update(
+        DATA_DIR, summaries_aws=commits["aws"], summaries_google=commits["google"]
+    )
+    _log("wrote manifest (summaries_aws, summaries_google)")
 
 
 def _write_db(documents: Sequence[Document], chunks) -> None:
@@ -209,39 +216,68 @@ def _write_documents_db(documents: Sequence[Document]) -> None:
         db.close()
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        prog="python -m terraform_docs_mcp.build_index",
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument(
-        "--force",
-        action="store_true",
-        help="Rebuild even when nothing changed.",
-    )
-    group.add_argument(
-        "--check",
-        action="store_true",
-        help="Report whether a rebuild is needed and exit 1 if so; build nothing.",
-    )
-    args = parser.parse_args(argv)
+@app.callback(invoke_without_command=True)
+def default(ctx: typer.Context) -> None:
+    """Build everything: the document index, then summaries. Each stage skips
+    itself if its own inputs haven't changed. Run `index` or `summaries`
+    directly for just one stage."""
+    if ctx.invoked_subcommand is not None:
+        return
+    _run_index()
+    _run_summaries()
 
-    if args.check:
-        reason = _staleness(DATA_DIR, PROVIDERS)
-        if reason is None:
-            _log("up to date")
-            return 0
-        _log(f"stale: {reason}")
-        return 1
+
+@app.command()
+def index(
+    force: Annotated[
+        bool, typer.Option(help="Rebuild even when nothing changed.")
+    ] = False,
+    check: Annotated[
+        bool,
+        typer.Option(
+            help="Report whether a rebuild is needed and exit 1 if so; build nothing."
+        ),
+    ] = False,
+):
+    """Build the packaged search index in `_data/`."""
+    if force and check:
+        raise typer.BadParameter("--force and --check are mutually exclusive")
+
+    if check:
+        commits = _current_commits()
+        if _index_stale(commits):
+            _log("stale: a provider commit moved (or documents.sqlite3 is missing)")
+            raise typer.Exit(1)
+        _log("up to date")
+        raise typer.Exit(0)
 
     try:
-        build(force=args.force)
+        _run_index(force=force)
     except KeyboardInterrupt:
-        # The manifest is written last, so an interrupted build leaves none and
-        # the next run starts over. Nothing to clean up.
         _log("interrupted")
+        raise typer.Exit(130)
+
+
+@app.command()
+def summaries(
+    force: Annotated[
+        bool,
+        typer.Option(help="Regenerate every summary, even ones that already exist."),
+    ] = False,
+):
+    """Refresh `src/summaries/` for any document whose content changed."""
+    try:
+        _run_summaries(force=force)
+    except KeyboardInterrupt:
+        _log("interrupted")
+        raise typer.Exit(130)
+
+
+@handle_broken_pipe
+def main() -> int:
+    try:
+        app()
+    except KeyboardInterrupt:
         return 130
     return 0
 

@@ -14,17 +14,16 @@ from typing import Any, Iterable
 
 import numpy as np
 
-from .manifest import read as _read_manifest
+from .manifest import Manifest
 from ._config import (
     DOCS_DIRNAME,
     INDEX_FILENAME,
-    MANIFEST_FILENAME,
     MODEL_DIRNAME,
     VECTORS_FILENAME,
     IndexUnavailable,
 )
 from ._config import data_dir as _default_data_dir
-from .embed import MODEL_ID, SentenceTransformerEmbedder
+from .embed import SentenceTransformerEmbedder
 from .search import (
     aggregate_to_documents,
     infer_provider,
@@ -109,7 +108,7 @@ class Index:
         self._lock = threading.Lock()
         self._vectors: np.ndarray | None = None
         self._embedder: SentenceTransformerEmbedder | None = None
-        self._manifest: dict[str, Any] | None = None
+        self._manifest: Manifest | None = None
 
         if not self._db_path.exists():
             raise IndexUnavailable(
@@ -123,11 +122,11 @@ class Index:
                 "git repository."
             )
 
-        # Eager, unlike everything else here: the manifest is what proves this
-        # index matches the code about to query it, and `serve()` builds an
-        # Index at startup precisely so a broken install fails before a client
-        # ever connects rather than on its first search.
-        self._manifest = _read_manifest(self._dir)
+        # Manifest.read() never raises (missing/corrupt both read as an empty
+        # Manifest) -- it no longer carries anything _check_compatible() could
+        # use to reject a stale index, so this is bookkeeping for stats(), not
+        # a correctness gate the way it once was.
+        self._manifest = Manifest.read(self._dir)
 
     # ---------------------------------------------------------------- lazy
 
@@ -167,7 +166,7 @@ class Index:
 
     # ------------------------------------------------------------- metadata
 
-    def manifest(self) -> dict[str, Any]:
+    def manifest(self) -> Manifest:
         """Build provenance: what produced this index, and when.
 
         Read once in ``__init__``; see :mod:`terraform_docs_mcp.manifest`.
@@ -178,24 +177,15 @@ class Index:
     def _check_compatible(self) -> None:
         """Refuse to search an index built by a different model.
 
-        Compares the recorded model id rather than asking the embedder, so
-        this stays cheap: it must not force a multi-hundred-megabyte torch
-        model to load just to reject a stale index.
+        Dormant: manifest.py no longer records model_id/dim at all (it was
+        simplified down to provider commit SHAs -- see manifest.Manifest),
+        and this whole hybrid/vector pipeline is already disabled upstream
+        (build_index.py's vector-embed build is commented out). There is
+        nothing left to compare against, so this no longer raises. Restoring
+        a real check here is part of re-enabling that pipeline, not something
+        to fake in the meantime.
         """
-        inputs = self.manifest().get("inputs") or {}
-        outputs = self.manifest().get("outputs") or {}
-        if inputs.get("model_id") != MODEL_ID:
-            raise IndexUnavailable(
-                f"Index was built with {inputs.get('model_id')} "
-                f"(dim {outputs.get('dim')}) but this build embeds with "
-                f"{MODEL_ID}. Rebuild with `make index`."
-            )
-        recorded = int(outputs.get("dim", 0))
-        if self.vectors.shape[1] != recorded:
-            raise IndexUnavailable(
-                f"Vector array has {self.vectors.shape[1]} dimensions but the index "
-                f"records {recorded}. Rebuild with `make index`."
-            )
+        return
 
     # ------------------------------------------------------------ retrieval
 
@@ -422,22 +412,20 @@ class Index:
         return body
 
     def stats(self) -> dict[str, Any]:
-        """Live row counts alongside the manifest that describes the build.
-
-        The counts are recounted rather than read from the manifest, so the two
-        disagreeing is itself informative: it means the database was replaced
-        without rebuilding.
+        """Live row counts alongside the provider commits documents/summaries
+        were last built from.
         """
         conn = self._conn()
         docs = conn.execute("SELECT COUNT(*) AS n FROM documents").fetchone()["n"]
         chunks = conn.execute("SELECT COUNT(*) AS n FROM chunks").fetchone()["n"]
-        document = self.manifest()
+        m = self.manifest()
         return {
             "documents": docs,
             "chunks": chunks,
-            "fingerprint": document.get("fingerprint"),
-            **(document.get("inputs") or {}),
-            **(document.get("outputs") or {}),
+            "documents_aws_commit": m.documents_aws_commit_sha,
+            "documents_google_commit": m.documents_google_commit_sha,
+            "summaries_aws_commit": m.summaries_aws_commit_sha,
+            "summaries_google_commit": m.summaries_google_commit_sha,
         }
 
 

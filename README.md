@@ -134,7 +134,7 @@ and the Makefile uses that file as its target.
 make index                 # rebuild if an input changed, otherwise a no-op
 make index FORCE=1         # rebuild regardless (also: make reindex)
 terraform-docs-mcp stats   # what the installed index was built from
-python -m terraform_docs_mcp.build_index --check   # why it is stale, no build
+uv run src/terraform_docs_mcp/build_index.py index --check   # why it is stale, no build
 ```
 
 Staleness is content-based rather than mtime-based, because mtimes get it wrong
