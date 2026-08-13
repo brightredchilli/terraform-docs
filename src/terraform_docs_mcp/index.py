@@ -18,6 +18,7 @@ from .manifest import Manifest
 from ._config import (
     DOCS_DIRNAME,
     INDEX_FILENAME,
+    MANIFEST_FILENAME,
     MODEL_DIRNAME,
     VECTORS_FILENAME,
     IndexUnavailable,
@@ -122,11 +123,11 @@ class Index:
                 "git repository."
             )
 
-        # Manifest.read() never raises (missing/corrupt both read as an empty
-        # Manifest) -- it no longer carries anything _check_compatible() could
-        # use to reject a stale index, so this is bookkeeping for stats(), not
-        # a correctness gate the way it once was.
-        self._manifest = Manifest.read(self._dir)
+        # Manifest() never raises (missing/corrupt both load as empty) -- it
+        # no longer carries anything _check_compatible() could use to reject
+        # a stale index, so this is bookkeeping for stats(), not a
+        # correctness gate the way it once was.
+        self._manifest = Manifest(self._dir / MANIFEST_FILENAME)
 
     # ---------------------------------------------------------------- lazy
 

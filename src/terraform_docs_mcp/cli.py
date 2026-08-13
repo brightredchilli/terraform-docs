@@ -12,10 +12,11 @@ from typing import Annotated
 
 import typer
 
-from terraform_docs_mcp._config import DOCUMENTS_INDEX_FILENAME, PROJECT_ROOT
+from terraform_docs_mcp._config import DOCUMENTS_DB_FILENAME, PROJECT_ROOT
 from terraform_docs_mcp._config import data_dir as _data_dir
 from terraform_docs_mcp.corpus import Kind, Provider
-from terraform_docs_mcp.util import all_values, handle_broken_pipe
+from terraform_docs_mcp.util.strenum import all_values
+from terraform_docs_mcp.util.handle_broken_pipe import handle_broken_pipe
 
 from .db import Db
 from .index import Index, IndexUnavailable
@@ -43,7 +44,7 @@ def _get_index() -> Index:
 
 
 def _get_documents_db() -> Db:
-    path = _data_dir() / DOCUMENTS_INDEX_FILENAME
+    path = _data_dir() / DOCUMENTS_DB_FILENAME
     if not path.exists():
         print(f"error: no document index at {path}. Run `make index`.", file=sys.stderr)
         raise typer.Exit(2)

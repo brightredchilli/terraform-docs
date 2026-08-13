@@ -30,6 +30,9 @@ build = [
     "langchain-text-splitters>=1.1.2",
     "huggingface-hub>=0.30",
     "pyyaml>=6",
+    # util/log.py -- only build_index.py imports it today; move to the main
+    # `dependencies` list if cli.py/server.py ever want structured logging too.
+    "structlog>=25.1",
 ]
 dev = [
     "basedpyright>=1.31",

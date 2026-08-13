@@ -38,7 +38,7 @@ DOCS_DIRNAME = "docs"
 
 #: Document-level trigram search (see db.py). A separate artifact from
 #: index.sqlite3 -- built alongside it, not wired into the hybrid pipeline.
-DOCUMENTS_INDEX_FILENAME = "documents.sqlite3"
+DOCUMENTS_DB_FILENAME = "documents.sqlite3"
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent

@@ -1,4 +1,3 @@
-from enum import StrEnum
 import functools
 import os
 from signal import SIGPIPE
@@ -25,10 +24,3 @@ def handle_broken_pipe(fn):
             return 128 + SIGPIPE
 
     return decorator
-
-
-def all_values(e: type[StrEnum]) -> str:
-    """
-    Concatenate all members of the StrEnum and return it as a string
-    """
-    return ", ".join((str(p) for p in e))

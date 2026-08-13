@@ -16,7 +16,7 @@ from mcp.server import MCPServer
 from pydantic import Field
 
 from terraform_docs_mcp.corpus import Kind, Provider
-from terraform_docs_mcp.util import all_values
+from terraform_docs_mcp.util.strenum import all_values
 
 from ._config import __version__
 from .index import Index, IndexUnavailable

@@ -65,6 +65,9 @@ src/terraform_docs_mcp/
   build_index.py  dev entry point: builds _data/ and src/summaries/
   manifest.py     _data/manifest.json read/write
   embed.py        sentence-transformers wrapper
+  util/git.py                 a repo's commit SHA           (build-time only)
+  util/strenum.py              all_values
+  util/handle_broken_pipe.py   handle_broken_pipe
   _data/          GENERATED — gitignored, ships in the wheel
 src/summaries/    GENERATED once — committed, not gitignored
 ```

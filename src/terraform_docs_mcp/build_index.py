@@ -41,8 +41,13 @@ import typer
 # only used by the disabled vector-writing block.
 # import numpy as np
 
-from terraform_docs_mcp._config import DATA_DIR, DOCUMENTS_INDEX_FILENAME, PROJECT_ROOT
-from terraform_docs_mcp.manifest import Manifest, git_sha, repo_of
+from terraform_docs_mcp._config import (
+    DATA_DIR,
+    DOCUMENTS_DB_FILENAME,
+    MANIFEST_FILENAME,
+    PROJECT_ROOT,
+)
+from terraform_docs_mcp.manifest import Manifest
 
 from terraform_docs_mcp.corpus import (
     Document,
@@ -51,7 +56,8 @@ from terraform_docs_mcp.corpus import (
 )  # chunk_document: see below
 from terraform_docs_mcp.db import Db
 from terraform_docs_mcp.summarize import ensure_summaries
-from terraform_docs_mcp.util import handle_broken_pipe
+from terraform_docs_mcp.util import git, log
+from terraform_docs_mcp.util.handle_broken_pipe import handle_broken_pipe
 
 # from terraform_docs_mcp.embed import SentenceTransformerEmbedder, download_model
 from terraform_docs_mcp.index import (
@@ -62,12 +68,11 @@ from terraform_docs_mcp.index import (
 app = typer.Typer()
 
 
-def _log(message: str) -> None:
-    print(f"[build-index] {message}", flush=True)
-
-
 def _current_commits() -> dict[str, str]:
-    return {name: git_sha(repo_of(config)) for name, config in PROVIDERS.items()}
+    return {
+        name: git.sha(PROJECT_ROOT / config.source_docs_dir)
+        for name, config in PROVIDERS.items()
+    }
 
 
 def _copy_docs() -> None:
@@ -93,69 +98,69 @@ def _copy_docs() -> None:
             )
 
 
-def _index_stale(commits: dict[str, str]) -> bool:
-    recorded = Manifest.read(DATA_DIR)
+def _index_stale(manifest: Manifest, commits: dict[str, str]) -> bool:
     return (
-        recorded.documents_aws_commit_sha != commits["aws"]
-        or recorded.documents_google_commit_sha != commits["google"]
-        or not (DATA_DIR / DOCUMENTS_INDEX_FILENAME).exists()
+        manifest.documents_aws_commit_sha != commits["aws"]
+        or manifest.documents_google_commit_sha != commits["google"]
+        or not (DATA_DIR / DOCUMENTS_DB_FILENAME).exists()
     )
 
 
-def _run_index(force: bool = False) -> None:
+def _run_index(manifest: Manifest, force: bool = False) -> None:
     """Rebuild ``documents.sqlite3`` if either provider commit moved.
 
     Wholesale, not incremental: the database is unlinked and every document
     reloaded and reinserted, so there is no partial state to reason about.
     """
     commits = _current_commits()
-    if not force and not _index_stale(commits):
-        _log("documents up to date")
+    if not force and not _index_stale(manifest, commits):
+        log.info("documents_up_to_date")
         return
-    _log("rebuilding documents.sqlite3")
+    log.info("documents_rebuilding")
 
-    _log("loading documents")
     t0 = time.time()
     documents = []
     for provider in PROVIDERS.values():
         for doc in iter_documents(provider):
             documents.append(doc)
-    _log(f"{len(documents)} documents ({time.time() - t0:.1f}s)")
+    log.info("documents_loaded", count=len(documents), duration_s=round(time.time() - t0, 1))
 
-    _log("writing document-level trigram index")
+    log.info("documents_db_writing")
     _write_documents_db(documents)
 
-    _log("copying documentation and licenses")
+    log.info("docs_and_licenses_copying")
     _copy_docs()
 
-    Manifest.update(
-        DATA_DIR, documents_aws=commits["aws"], documents_google=commits["google"]
-    )
-    _log("wrote manifest (documents_aws, documents_google)")
+    manifest.documents_aws_commit_sha = commits["aws"]
+    manifest.documents_google_commit_sha = commits["google"]
+    manifest.save()
+    log.info("manifest_saved", fields=["documents_aws", "documents_google"])
 
 
-def _run_summaries(force: bool = False) -> None:
+def _run_summaries(manifest: Manifest, force: bool = False) -> None:
     """Refresh ``src/summaries/`` for any document whose checksum changed.
 
     Reads from ``documents.sqlite3`` (via ``Db.iter_all``), so it always runs
     against whatever the last ``_run_index`` actually produced -- run ``index``
     first if the database itself is stale.
     """
-    db = Db(DATA_DIR / DOCUMENTS_INDEX_FILENAME, readonly=True)
+    db = Db(DATA_DIR / DOCUMENTS_DB_FILENAME, readonly=True)
     try:
         counts = ensure_summaries(db, force=force)
     finally:
         db.close()
-    _log(
-        f"summaries: {counts['written']} written, {counts['regenerated']} regenerated, "
-        f"{counts['skipped']} skipped"
+    log.info(
+        "summaries_processed",
+        written=counts["written"],
+        regenerated=counts["regenerated"],
+        skipped=counts["skipped"],
     )
 
     commits = _current_commits()
-    Manifest.update(
-        DATA_DIR, summaries_aws=commits["aws"], summaries_google=commits["google"]
-    )
-    _log("wrote manifest (summaries_aws, summaries_google)")
+    manifest.summaries_aws_commit_sha = commits["aws"]
+    manifest.summaries_google_commit_sha = commits["google"]
+    manifest.save()
+    log.info("manifest_saved", fields=["summaries_aws", "summaries_google"])
 
 
 def _write_db(documents: Sequence[Document], chunks) -> None:
@@ -203,7 +208,7 @@ def _write_db(documents: Sequence[Document], chunks) -> None:
 
 
 def _write_documents_db(documents: Sequence[Document]) -> None:
-    db_path = DATA_DIR / DOCUMENTS_INDEX_FILENAME
+    db_path = DATA_DIR / DOCUMENTS_DB_FILENAME
     db_path.unlink(missing_ok=True)
     db = Db(db_path, readonly=False)
     try:
@@ -223,8 +228,9 @@ def default(ctx: typer.Context) -> None:
     directly for just one stage."""
     if ctx.invoked_subcommand is not None:
         return
-    _run_index()
-    _run_summaries()
+    manifest = Manifest(DATA_DIR / MANIFEST_FILENAME)
+    _run_index(manifest)
+    _run_summaries(manifest)
 
 
 @app.command()
@@ -243,18 +249,20 @@ def index(
     if force and check:
         raise typer.BadParameter("--force and --check are mutually exclusive")
 
+    manifest = Manifest(DATA_DIR / MANIFEST_FILENAME)
+
     if check:
         commits = _current_commits()
-        if _index_stale(commits):
-            _log("stale: a provider commit moved (or documents.sqlite3 is missing)")
+        if _index_stale(manifest, commits):
+            log.warning("documents_stale", reason="provider commit moved or documents.sqlite3 missing")
             raise typer.Exit(1)
-        _log("up to date")
+        log.info("documents_up_to_date")
         raise typer.Exit(0)
 
     try:
-        _run_index(force=force)
+        _run_index(manifest, force=force)
     except KeyboardInterrupt:
-        _log("interrupted")
+        log.warning("build_interrupted")
         raise typer.Exit(130)
 
 
@@ -266,10 +274,11 @@ def summaries(
     ] = False,
 ):
     """Refresh `src/summaries/` for any document whose content changed."""
+    manifest = Manifest(DATA_DIR / MANIFEST_FILENAME)
     try:
-        _run_summaries(force=force)
+        _run_summaries(manifest, force=force)
     except KeyboardInterrupt:
-        _log("interrupted")
+        log.warning("build_interrupted")
         raise typer.Exit(130)
 
 
